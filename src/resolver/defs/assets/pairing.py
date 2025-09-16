@@ -38,30 +38,27 @@ def build_pairs_shard(shard_index: int):
   out_path = OUT_DIR / f"shard={shard_index}.parquet"
 
   sql = render_sql(
-    "blocking_pairs_shard.sql.j2",
+    "blocking_pairs_shard_parquet.sql.j2",
     target_schema="er",
     blocks_table="er.blocks_adaptive",
     shard_index=shard_index,
     shard_modulus=SHARD_MODULUS,
     cap_per_a=CAP_PER_A,
+
     #bkey_hash_col='bkey_hash',
   )
   # IMPORTANT: open DB in read-only mode so concurrent readers don’t fight
   con = duckdblib.connect(os.getenv("DUCKDB_DATABASE"), read_only=True)
   try:
+    con.execute("PRAGMA memory_limit='6GB'")
     con.execute("PRAGMA threads=4")
     con.execute("PRAGMA temp_directory='/tmp/duckdb-temp'")
-    con.execute(sql)
-
-    # Dump result table to a per-shard Parquet file
-    con.execute(f"""
-          COPY (SELECT * FROM er.blocking_pairs_{shard_index})
-          TO '{out_path.as_posix()}'
-          (FORMAT PARQUET, OVERWRITE_OR_IGNORE TRUE);
-      """)
-
+    con.execute(
+      f"COPY ({sql}) TO '{out_path.as_posix()}' (FORMAT PARQUET, OVERWRITE_OR_IGNORE TRUE)"
+    )
   finally:
     con.close()
+  return str(out_path)
 
 
 @op
@@ -81,6 +78,7 @@ def er_blocking_pairs_union(paths: list[str], duckdb: DuckDBResource):
       os.remove(p)
     except FileNotFoundError:
       pass
+  return total
 
 
 @graph_asset(name="er_blocking_pairs", group_name="er")

@@ -1,0 +1,74 @@
+-- WITH targets AS (
+--   SELECT table_schema, table_name
+--   FROM information_schema.tables
+--   WHERE table_schema IN ('er','er_dev')
+--     AND (table_name LIKE 'blocking_pairs_%'
+--          OR table_name LIKE 'tmp_%')
+-- )
+-- SELECT 'DROP TABLE IF EXISTS ' || table_schema || '.' || table_name || ';' AS stmt
+-- FROM targets;
+
+DROP TABLE IF EXISTS er.blocking_pairs_0;
+DROP TABLE IF EXISTS er.blocking_pairs_1;
+DROP TABLE IF EXISTS er.blocking_pairs_10;
+DROP TABLE IF EXISTS er.blocking_pairs_11;
+DROP TABLE IF EXISTS er.blocking_pairs_12;
+DROP TABLE IF EXISTS er.blocking_pairs_13;
+DROP TABLE IF EXISTS er.blocking_pairs_14;
+DROP TABLE IF EXISTS er.blocking_pairs_15;
+DROP TABLE IF EXISTS er.blocking_pairs_16;
+DROP TABLE IF EXISTS er.blocking_pairs_17;
+DROP TABLE IF EXISTS er.blocking_pairs_18;
+DROP TABLE IF EXISTS er.blocking_pairs_19;
+DROP TABLE IF EXISTS er.blocking_pairs_2;
+DROP TABLE IF EXISTS er.blocking_pairs_20;
+DROP TABLE IF EXISTS er.blocking_pairs_21;
+DROP TABLE IF EXISTS er.blocking_pairs_22;
+DROP TABLE IF EXISTS er.blocking_pairs_23;
+DROP TABLE IF EXISTS er.blocking_pairs_24;
+DROP TABLE IF EXISTS er.blocking_pairs_25;
+DROP TABLE IF EXISTS er.blocking_pairs_26;
+DROP TABLE IF EXISTS er.blocking_pairs_27;
+DROP TABLE IF EXISTS er.blocking_pairs_28;
+DROP TABLE IF EXISTS er.blocking_pairs_29;
+DROP TABLE IF EXISTS er.blocking_pairs_3;
+DROP TABLE IF EXISTS er.blocking_pairs_30;
+DROP TABLE IF EXISTS er.blocking_pairs_31;
+DROP TABLE IF EXISTS er.blocking_pairs_32;
+DROP TABLE IF EXISTS er.blocking_pairs_33;
+DROP TABLE IF EXISTS er.blocking_pairs_34;
+DROP TABLE IF EXISTS er.blocking_pairs_35;
+DROP TABLE IF EXISTS er.blocking_pairs_36;
+DROP TABLE IF EXISTS er.blocking_pairs_37;
+DROP TABLE IF EXISTS er.blocking_pairs_38;
+DROP TABLE IF EXISTS er.blocking_pairs_39;
+DROP TABLE IF EXISTS er.blocking_pairs_4;
+DROP TABLE IF EXISTS er.blocking_pairs_40;
+DROP TABLE IF EXISTS er.blocking_pairs_41;
+DROP TABLE IF EXISTS er.blocking_pairs_42;
+DROP TABLE IF EXISTS er.blocking_pairs_43;
+DROP TABLE IF EXISTS er.blocking_pairs_44;
+DROP TABLE IF EXISTS er.blocking_pairs_45;
+DROP TABLE IF EXISTS er.blocking_pairs_46;
+DROP TABLE IF EXISTS er.blocking_pairs_47;
+DROP TABLE IF EXISTS er.blocking_pairs_48;
+DROP TABLE IF EXISTS er.blocking_pairs_49;
+DROP TABLE IF EXISTS er.blocking_pairs_5;
+DROP TABLE IF EXISTS er.blocking_pairs_50;
+DROP TABLE IF EXISTS er.blocking_pairs_51;
+DROP TABLE IF EXISTS er.blocking_pairs_52;
+DROP TABLE IF EXISTS er.blocking_pairs_53;
+DROP TABLE IF EXISTS er.blocking_pairs_54;
+DROP TABLE IF EXISTS er.blocking_pairs_55;
+DROP TABLE IF EXISTS er.blocking_pairs_56;
+DROP TABLE IF EXISTS er.blocking_pairs_57;
+DROP TABLE IF EXISTS er.blocking_pairs_58;
+DROP TABLE IF EXISTS er.blocking_pairs_59;
+DROP TABLE IF EXISTS er.blocking_pairs_6;
+DROP TABLE IF EXISTS er.blocking_pairs_60;
+DROP TABLE IF EXISTS er.blocking_pairs_61;
+DROP TABLE IF EXISTS er.blocking_pairs_62;
+DROP TABLE IF EXISTS er.blocking_pairs_63;
+DROP TABLE IF EXISTS er.blocking_pairs_7;
+DROP TABLE IF EXISTS er.blocking_pairs_8;
+DROP TABLE IF EXISTS er.blocking_pairs_9;
