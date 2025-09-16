@@ -9,38 +9,11 @@ stopwords_list = [w.strip() for w in stopwords_env.split(",") if w.strip()]
 
 
 @dg.asset(deps=["clean_companies"])
-def create_blocks(duckdb: DuckDBResource):
-  """
-     This will create ONLY blocks - will need to shard and pair downstream
-     We do this to avoid blowing out memory
-   """
-  sql = render_sql(
-    "create_blocks.sql.j2",
-    source_table="silver.companies",
-    target_schema="er",
-    id_col="company_id",
-    name_col="company_name",
-    domain_col="domain_name",
-    city_col="city",
-    country_col="final_country",
-    use_domain=True,
-    use_name3_country=True,
-    use_compact5_city=True,
-    max_block_size=1000,
-  )
-  with duckdb.get_connection() as con:
-    con.execute("PRAGMA temp_directory='/tmp/duckdb-temp'")
-    con.execute(sql)
-  return "er.company_blocks"
-
-
-@dg.asset(deps=["clean_companies"])
 def company_blocks_adaptive(context: AssetExecutionContext,
                             duckdb: DuckDBResource) -> MaterializeResult:
   """
      This will create ONLY blocks using a staged/adaptive approach. The idea here is to avoid
      human trial and error to determine optimal blocking strategy
-     
    """
   sql = render_sql(
     "create_blocks_adaptive.sql.j2",
@@ -58,7 +31,7 @@ def company_blocks_adaptive(context: AssetExecutionContext,
     refine_domain_with_country=True,
     enable_stage3_token=True,
     stage3_min_token_len=3,
-    stage3_stopwords=stopwords_list,  # <--- inject here
+    stage3_stopwords=stopwords_list,
     enable_stage3_name6=True,
   )
   with duckdb.get_connection() as con:
@@ -116,3 +89,29 @@ def company_blocks_adaptive(context: AssetExecutionContext,
         "heavy_blocks_top10_json": MetadataValue.json(top_heavy.to_dict("records")),
         "sql_template": MetadataValue.text("create_blocks_adaptive.sql.j2"),
       })
+
+
+# @dg.asset(deps=["clean_companies"])
+# def create_blocks(duckdb: DuckDBResource):
+#   """
+#      This will create ONLY blocks - will need to shard and pair downstream
+#      We do this to avoid blowing out memory
+#    """
+#   sql = render_sql(
+#     "create_blocks.sql.j2",
+#     source_table="silver.companies",
+#     target_schema="er",
+#     id_col="company_id",
+#     name_col="company_name",
+#     domain_col="domain_name",
+#     city_col="city",
+#     country_col="final_country",
+#     use_domain=True,
+#     use_name3_country=True,
+#     use_compact5_city=True,
+#     max_block_size=1000,
+#   )
+#   with duckdb.get_connection() as con:
+#     con.execute("PRAGMA temp_directory='/tmp/duckdb-temp'")
+#     con.execute(sql)
+#   return "er.company_blocks"
