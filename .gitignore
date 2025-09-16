@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+data/
+artifacts/
+.pytest_cache
+
+.dagster_home
+
+# USUALLY, you would not add .env files
+# but these are innocuous
+#.env*
+
+# Virtual environments
+.venv
+.python-version

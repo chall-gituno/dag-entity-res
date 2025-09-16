@@ -1,0 +1,131 @@
+-- Clean a company from the Kaggle companies data.
+-- cleaning_company.sql.j2
+-- Materialize a clean companies table from bronze
+
+CREATE SCHEMA IF NOT EXISTS {{ target_schema }};
+
+CREATE OR REPLACE TABLE {{ target_schema }}.companies AS
+WITH base AS (
+  SELECT
+    -- raw columns, trimmed to avoid stray spaces
+    column00 as company_id,
+    NULLIF(TRIM(name), '')                         AS name_raw,
+    NULLIF(TRIM(domain), '')                       AS domain_raw,
+    NULLIF(TRIM(industry), '')                     AS industry_raw,
+    NULLIF(TRIM("linkedin url"), '')                 AS linkedin_raw,
+    NULLIF(TRIM(locality), '')                     AS locality_raw,
+    NULLIF(LOWER(TRIM(country)), '')               AS country_raw,
+    NULLIF(TRIM("size range"), '')                 AS size_range_raw,
+    "year founded"                                 AS year_founded,
+    "current employee estimate" AS current_employee_estimate,
+    "total employee estimate"   AS total_employee_estimate
+  FROM {{ source_schema }}.companies
+),
+null_norm AS (
+  -- Normalize string literals that mean "missing" to NULL
+  SELECT
+  company_id,
+    CASE WHEN LOWER(name_raw) IN ('nan','null','n/a') THEN NULL ELSE name_raw END AS name_raw,
+    CASE WHEN LOWER(domain_raw) IN ('nan','null','n/a') THEN NULL ELSE domain_raw END AS domain_raw,
+    CASE WHEN LOWER(industry_raw) IN ('nan','null','n/a') THEN NULL ELSE industry_raw END AS industry_raw,
+    CASE WHEN LOWER(linkedin_raw) IN ('nan','null','n/a') THEN NULL ELSE linkedin_raw END AS linkedin_raw,
+    CASE WHEN LOWER(locality_raw) IN ('nan','null','n/a') THEN NULL ELSE locality_raw END AS locality_raw,
+    CASE WHEN country_raw IN ('nan','null','n/a') THEN NULL ELSE country_raw END AS country_raw,
+    year_founded,
+    size_range_raw,
+    current_employee_estimate,
+    total_employee_estimate
+  FROM base
+),
+typed AS (
+  SELECT
+  company_id,
+    -- core string normalizations (lowercase late, after regex)
+    name_raw,
+
+    -- domain: strip scheme, www, trailing slash
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(LOWER(COALESCE(domain_raw, '')), '^https?://', ''),
+        '^www\.', ''
+      ),
+      '/+$', ''
+    ) AS domain_norm,
+
+    LOWER(industry_raw) AS industry_norm,
+
+    -- linkedin: keep host/path, drop protocol, query, fragments; normalize company vs /in/
+    REGEXP_REPLACE(
+      LOWER(COALESCE(linkedin_raw, '')),
+      '^https?://', ''
+    ) AS linkedin_norm_raw,
+
+    locality_raw,
+    LOWER(country_raw) AS country_norm,
+
+    -- numeric casts (preserve NULL on failure)
+    
+
+    -- size ranges like "51-200" => keep as text or split
+    size_range_raw,
+    year_founded,
+    current_employee_estimate,
+    total_employee_estimate,
+
+    {# TRY_CAST(REGEXP_REPLACE(year_founded_raw, '[^0-9]', '', 'g') AS INTEGER) AS year_founded,
+    TRY_CAST(REGEXP_REPLACE(current_employee_estimate_raw, '[^0-9]', '', 'g') AS INTEGER) AS current_employee_estimate,
+    TRY_CAST(REGEXP_REPLACE(total_employee_estimate_raw,   '[^0-9]', '', 'g') AS INTEGER) AS total_employee_estimate #}
+  FROM null_norm
+),
+linkedin_fixed AS (
+  SELECT
+    *,
+    -- remove query/fragment and trailing slashes
+    REGEXP_REPLACE(SPLIT_PART(linkedin_norm_raw, '?', 1), '/+$', '') AS linkedin_clean1,
+    -- enforce leading linkedin.com if present; keep other hosts as-is
+    CASE
+      WHEN linkedin_norm_raw LIKE 'linkedin.com/%' OR linkedin_norm_raw LIKE 'www.linkedin.com/%'
+        THEN REGEXP_REPLACE(linkedin_norm_raw, '^www\.', '')
+      WHEN linkedin_norm_raw LIKE '%linkedin.com/%'
+        THEN SUBSTRING(linkedin_norm_raw FROM '.*(linkedin\\.com/.*)$')
+      ELSE NULLIF(linkedin_norm_raw, '')
+    END AS linkedin_hosted
+  FROM typed
+),
+geo AS (
+  -- Parse locality safely: expect "city, state, country" but allow missing parts.
+  SELECT
+    *,
+    -- Split into up to 3 parts, trimming spaces
+    TRIM(SPLIT_PART(locality_raw, ',', 1)) AS city_raw,
+    NULLIF(TRIM(SPLIT_PART(locality_raw, ',', 2)), '') AS state_raw,
+    NULLIF(TRIM(SPLIT_PART(locality_raw, ',', 3)), '') AS country_from_locality
+  FROM linkedin_fixed
+),
+finalized AS (
+  SELECT
+    -- names to lowercase after cleaning (and keep ASCII variant if you like)
+    company_id,
+    LOWER(name_raw) AS company_name,
+
+    domain_norm AS domain_name,
+    industry_norm AS industry,
+    CASE
+      WHEN linkedin_hosted IS NOT NULL THEN REGEXP_REPLACE(linkedin_hosted, '/+$', '')
+      WHEN linkedin_clean1  IS NOT NULL THEN linkedin_clean1
+      ELSE NULL
+    END AS linkedin_url,
+
+    year_founded,
+    size_range_raw AS size_range,
+    current_employee_estimate,
+    total_employee_estimate,
+
+    LOWER(NULLIF(city_raw,  '')) AS city,
+    LOWER(NULLIF(state_raw, '')) AS state,
+
+    -- Prefer provided country; else parsed from locality
+    COALESCE(country_norm, LOWER(NULLIF(country_from_locality, ''))) AS final_country
+  FROM geo
+)
+SELECT * FROM finalized;
