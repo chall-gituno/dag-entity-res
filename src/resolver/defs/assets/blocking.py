@@ -8,9 +8,9 @@ stopwords_env = os.getenv("ER_STOPWORDS", "")
 stopwords_list = [w.strip() for w in stopwords_env.split(",") if w.strip()]
 
 
-@dg.asset(deps=["clean_companies"])
-def company_blocks_adaptive(context: AssetExecutionContext,
-                            duckdb: DuckDBResource) -> MaterializeResult:
+@dg.asset(deps=["clean_companies"], group_name="er")
+def er_company_blocking(context: AssetExecutionContext,
+                        duckdb: DuckDBResource) -> MaterializeResult:
   """
      This will create ONLY blocks using a staged/adaptive approach. The idea here is to avoid
      human trial and error to determine optimal blocking strategy
@@ -89,6 +89,27 @@ def company_blocks_adaptive(context: AssetExecutionContext,
         "heavy_blocks_top10_json": MetadataValue.json(top_heavy.to_dict("records")),
         "sql_template": MetadataValue.text("create_blocks_adaptive.sql.j2"),
       })
+
+
+@dg.asset(deps=["clean_companies"])
+def company_block_pair_with_stats(duckdb: DuckDBResource):
+  sql = render_sql(
+    "blocking_stats.sql.j2",
+    source_table="silver.companies",
+    target_schema="er",
+    id_col="company_id",
+    name_col="company_name",
+    domain_col="domain_name",
+    city_col="city",
+    country_col="final_country",
+    max_block_size=1000,
+    use_domain=True,
+    use_name3_country=True,
+    use_compact5_city=True,
+    # pairs_table="er.blocking_pairs",  # pass this if you already materialized pairs
+  )
+  with duckdb.get_connection() as con:
+    con.execute(sql)
 
 
 # @dg.asset(deps=["clean_companies"])

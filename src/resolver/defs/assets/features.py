@@ -1,15 +1,14 @@
 import os, glob
 from pathlib import Path
 from dagster import (
-  asset,
   op,
   graph_asset,
   DynamicOut,
   DynamicOutput,
   Out,
-  AssetExecutionContext,
-  MaterializeResult,
-  MetadataValue,
+  AssetIn,
+  In,
+  Nothing,
 )
 from typing import List
 import duckdb as duckdblib
@@ -22,8 +21,8 @@ COMPANIES_TABLE = "silver.companies"
 OUT_DIR = Path("data/er/tmp_features_shards")
 
 
-@op(out=DynamicOut(int))
-def emit_shard_indices(context):
+@op(ins={"_trigger": In(Nothing)}, out=DynamicOut(int))
+def emit_shard_indices(er_blocking_pairs):
   # this op is cheap; it just yields integers
   for i in range(SHARD_MODULUS):
     yield DynamicOutput(i, mapping_key=str(i))
@@ -97,10 +96,19 @@ def union_and_cleanup(paths: list[str]) -> int:
   return total
 
 
-@graph_asset(name="er_pair_features", group_name="er")
-def er_pair_features_graph():
+@graph_asset(
+  name="er_pair_features",
+  group_name="er",
+  ins={"er_blocking_pairs": AssetIn(dagster_type=Nothing)},
+)
+def er_pair_features_graph(er_blocking_pairs):
+  """
+  Generate the pair features from our pairs
+  """
+  # graph_asset doesn't have a deps so we use ins...and it expects that the 'in' is consumed
+  # so we pass it on to the first op (and ignore it)
   # cheap, sequential
-  indices = emit_shard_indices()
+  indices = emit_shard_indices(er_blocking_pairs)
   # fanout so we can do parallel work
   shard_paths = indices.map(build_feature_shard)
   # fan in from all the shard files to the final table

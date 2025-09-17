@@ -4,15 +4,15 @@ from typing import List
 from resolver.defs.resources import DuckDBResource
 from resolver.defs.sql_utils import render_sql
 from dagster import (
-  asset,
   op,
   graph_asset,
   DynamicOut,
   DynamicOutput,
   Out,
-  AssetExecutionContext,
-  MaterializeResult,
-  MetadataValue,
+  In,
+  AssetIn,
+  AssetKey,
+  Nothing,
 )
 import duckdb as duckdblib
 
@@ -22,8 +22,8 @@ CAP_PER_A = None  # e.g. 200 to cap; None = no cap
 OUT_DIR = Path("data/er/tmp_blocking_pairs_shards")  # per-shard files
 
 
-@op(out=DynamicOut(int))
-def emit_pair_shard_indices(context):
+@op(ins={"_trigger": In(Nothing)}, out=DynamicOut(int))
+def emit_pair_shard_indices():
   # this op is cheap; it just yields integers
   for i in range(SHARD_MODULUS):
     yield DynamicOutput(i, mapping_key=str(i))
@@ -81,9 +81,17 @@ def er_blocking_pairs_union(paths: list[str], duckdb: DuckDBResource):
   return total
 
 
-@graph_asset(name="er_blocking_pairs", group_name="er")
-def er_blocking_pairs_graph():
-  indices = emit_pair_shard_indices()
+@graph_asset(
+  name="er_blocking_pairs",
+  group_name="er",
+  ins={"er_company_blocking": AssetIn(dagster_type=Nothing)},
+  #ins={"er_company_blocking": AssetIn(dagster_type=Nothing)},
+)
+def er_blocking_pairs_graph(er_company_blocking):
+  """
+  Generate our pairs from our blocks
+  """
+  indices = emit_pair_shard_indices(er_company_blocking)
   # fanout so we can do parallel work
   shard_paths = indices.map(build_pairs_shard)
   # fan in from all the shard files to the final table

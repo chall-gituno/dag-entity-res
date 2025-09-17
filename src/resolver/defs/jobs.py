@@ -1,10 +1,10 @@
-from dagster import Definitions, define_asset_job, multiprocess_executor
+from dagster import define_asset_job, multiprocess_executor
 #from resolver.defs.assets.er_blocks import er_blocks_adaptive
 
 # ---- Jobs (asset selections) ----
 blocking_job = define_asset_job(
   name="blocking_job",
-  selection='key:"company_blocks_adaptive"',
+  selection='key:"er_company_blocking"',
   executor_def=multiprocess_executor.configured({"max_concurrent": 4}),  # tune
 )
 
@@ -17,10 +17,14 @@ pairing_job = define_asset_job(
 
 features_job = define_asset_job(
   name="features_job",
-  # Run all feature shards, then the union
-  selection='key:"er_pair_features_shard_*" or key:"er_pair_features"',
-  executor_def=multiprocess_executor.configured({"max_concurrent":
-                                                 4}),  # start conservative
+  selection='key:"er_pair_features"',
+  executor_def=multiprocess_executor.configured({"max_concurrent": 4}),
+)
+
+full_build = define_asset_job(
+  name="full_build",
+  selection='+key:"er_pair_features"',
+  executor_def=multiprocess_executor.configured({"max_concurrent": 4}),
 )
 
 # ---- Concurrency limit (extra guardrail; optional if you use jobs) ----

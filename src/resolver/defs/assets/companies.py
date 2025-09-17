@@ -81,7 +81,7 @@ def companies(context: dg.AssetExecutionContext, duckdb: DuckDBResource) -> None
     context.log.info(f"bronze.companies loaded with {n} rows from {glob_pattern}")
 
 
-@dg.asset(deps=["companies"])
+@dg.asset(deps=["companies"], group_name="ingested")
 def clean_companies(context: AssetExecutionContext, duckdb: DuckDBResource) -> str:
   """Apply cleaning and normalization to our raw data.  output result to silver schema"""
   sql = render_sql("clean_kag_comp.sql.j2",
@@ -91,49 +91,3 @@ def clean_companies(context: AssetExecutionContext, duckdb: DuckDBResource) -> s
     con.execute("create schema if not exists silver")
     con.execute(sql)
   return "silver.companies"
-
-
-@dg.asset(deps=["clean_companies"])
-def company_block_pairs(context: AssetExecutionContext, duckdb: DuckDBResource):
-  """
-  Create a table in the er schema (entity resolution) with block pairs
-  we can use to assist in our entity matching features
-  """
-  sql = render_sql(
-    "company_blocking.sql.j2",
-    source_table="silver.companies",
-    target_schema="er",
-    target_table="blocking_pairs",
-    id_col="company_id",
-    name_col="company_name",
-    domain_col="domain_name",
-    city_col="city",
-    country_col="final_country",
-    max_block_size=1000,
-    use_domain=True,
-    use_name3_country=True,
-    use_compact5_city=True,
-  )
-  with duckdb.get_connection() as con:
-    con.execute(sql)
-
-
-@dg.asset(deps=["clean_companies"])
-def company_block_pair_with_stats(duckdb: DuckDBResource):
-  sql = render_sql(
-    "blocking_stats.sql.j2",
-    source_table="silver.companies",
-    target_schema="er",
-    id_col="company_id",
-    name_col="company_name",
-    domain_col="domain_name",
-    city_col="city",
-    country_col="final_country",
-    max_block_size=1000,
-    use_domain=True,
-    use_name3_country=True,
-    use_compact5_city=True,
-    # pairs_table="er.blocking_pairs",  # pass this if you already materialized pairs
-  )
-  with duckdb.get_connection() as con:
-    con.execute(sql)
