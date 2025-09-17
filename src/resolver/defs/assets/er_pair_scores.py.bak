@@ -1,0 +1,123 @@
+# src/resolver/defs/assets/er_pair_scores.py
+from __future__ import annotations
+import dagster as dg
+from dagster import MetadataValue
+import duckdb
+import joblib
+import pandas as pd
+from pathlib import Path
+
+
+def _connect(db_path: str, read_only: bool = False):
+  con = duckdb.connect(db_path, read_only=read_only)
+  con.execute("PRAGMA temp_directory='/tmp/duckdb-temp'")
+  con.execute("PRAGMA threads=4")
+  return con
+
+
+@dg.asset(
+  name="er_pair_scores",
+  group_name="er",
+  deps=["er_pair_features"],
+  compute_kind="python",
+  description=
+  "Score pair_features with a saved sklearn Pipeline → writes er.pair_scores and er.pair_features_scored.",
+)
+def er_pair_scores(context) -> dg.MaterializeResult:
+  # ---- Config knobs (can be provided via run_config) ----
+  cfg_root = (context.op_execution_context.run_config or {})
+  cfg = {
+    **cfg_root.get("ops", {}).get("er_pair_scores", {}),
+    **cfg_root.get("assets", {}).get("er_pair_scores", {})
+  }
+
+  db_path: str = cfg.get("database", "/opt/test-data/experimental.duckdb")
+  features_table: str = cfg.get("features_table", "er.pair_features")
+  scores_table: str = cfg.get("scores_table", "er.pair_scores")
+  scored_features_table: str = cfg.get("scored_features_table",
+                                       "er.pair_features_scored")
+  model_path: str = cfg.get("model_path", "models/er_pair_clf.joblib")
+  batch_size: int = int(cfg.get("batch_size", 500_000))
+
+  drop_id_cols = cfg.get(
+    "drop_id_cols", ["company_id_a", "company_id_b", "label"])  # label may not exist
+
+  # ---- Load model (entire sklearn Pipeline) ----
+  model_file = Path(model_path)
+  if not model_file.exists():
+    raise FileNotFoundError(
+      f"Model file not found: {model_file}. "
+      "Train your pipeline and save it with joblib.dump(clf, model_path).")
+  clf = joblib.load(model_file)
+
+  # ---- Prep DB connections ----
+  # duckdb won't let two connections with different configs
+  #con_r = _connect(db_path, read_only=True)
+
+  con_w = _connect(db_path, read_only=False)
+  con_w.execute("CREATE SCHEMA IF NOT EXISTS er")
+
+  # Fresh scores table
+  con_w.execute(
+    f"CREATE OR REPLACE TABLE {scores_table} (company_id_a BIGINT, company_id_b BIGINT, model_score DOUBLE)"
+  )
+
+  # Count & iterate
+  total = con_w.execute(f"SELECT COUNT(*) FROM {features_table}").fetchone()[0]
+  context.log.info(
+    f"Scoring {total:,} pairs from {features_table} using model {model_file}")
+
+  scored = 0
+  offset = 0
+
+  while offset < total:
+    # Stable paging: order by ids (helps OFFSET be deterministic)
+    df = con_w.execute(f"""
+            SELECT *
+            FROM {features_table}
+            ORDER BY company_id_a, company_id_b
+            LIMIT {batch_size} OFFSET {offset}
+            """).fetch_df()
+
+    if df.empty:
+      break
+
+    X = df.drop(columns=drop_id_cols, errors="ignore")
+
+    # Predict probabilities (assumes clf is a full Pipeline incl. preprocessing)
+    probs = clf.predict_proba(X)[:, 1]
+
+    out = pd.DataFrame({
+      "company_id_a": df["company_id_a"].astype("int64"),
+      "company_id_b": df["company_id_b"].astype("int64"),
+      "model_score": probs,
+    })
+
+    # Append this batch
+    con_w.register("out_df", out)
+    con_w.execute(f"INSERT INTO {scores_table} SELECT * FROM out_df")
+    scored += len(out)
+    offset += len(df)
+
+    context.log.info(f"Scored {scored:,}/{total:,}")
+
+  # Build the scored features table
+  con_w.execute(f"""
+        CREATE OR REPLACE TABLE {scored_features_table} AS
+        SELECT f.*, s.model_score
+        FROM {features_table} f
+        LEFT JOIN {scores_table} s
+          USING (company_id_a, company_id_b)
+    """)
+  merged = con_w.execute(f"SELECT COUNT(*) FROM {scored_features_table}").fetchone()[0]
+  con_w.close()
+
+  return dg.MaterializeResult(
+    metadata={
+      "pairs_total": MetadataValue.int(total),
+      "pairs_scored": MetadataValue.int(scored),
+      "batch_size": MetadataValue.int(batch_size),
+      "model_path": MetadataValue.path(str(model_file)),
+      "scores_table": MetadataValue.text(scores_table),
+      "scored_features_table": MetadataValue.text(scored_features_table),
+    })

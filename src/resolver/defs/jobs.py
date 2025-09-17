@@ -27,6 +27,12 @@ full_build = define_asset_job(
   executor_def=multiprocess_executor.configured({"max_concurrent": 4}),
 )
 
+scoring_job = define_asset_job(
+  name="scoring_job",
+  selection='key:"er_pair_scores"',
+  executor_def=multiprocess_executor.configured({"max_concurrent": 4}),
+)
+
 # ---- Concurrency limit (extra guardrail; optional if you use jobs) ----
 # Keeps ANY ad-hoc runs from blasting too many feature shards at once.
 #limits = [ConcurrencyLimit(key="er-pair-features", limit=2)]
