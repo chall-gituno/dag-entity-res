@@ -26,7 +26,7 @@ def _connect_duckdb(db_uri: str, read_only: bool = True) -> duckdb.DuckDBPyConne
   deps=[dg.AssetKey("er_pair_features")],
   compute_kind="python",
   description=(
-    "Stream-score er.pair_features with a saved sklearn Pipeline using Arrow batches. "
+    "Stream-score er.pair_features with a saved sklearn Pipeline using batches. "
     "Writes Parquet → creates er.pair_scores, and a view er.v_pair_features_scored."),
 )
 def er_pair_scores_stream(context, duckdb: DuckDBResource) -> dg.MaterializeResult:
