@@ -1,20 +1,18 @@
 # src/resolver/defs/assets/er_pair_scores_sharded.py
 from __future__ import annotations
-from dagster import (
-  graph_asset,
-  AssetIn,
-  AssetKey,
-  op,
-  In,
-  Out,
-  Nothing,
-  DynamicOut,
-  DynamicOutput,
-  MaterializeResult,
-  MetadataValue,
-  define_asset_job,
-  multiprocess_executor,
-)
+import dagster as dg
+# from dagster import (
+#   graph_asset,
+#   AssetIn,
+#   op,
+#   In,
+#   Out,
+#   dg.Nothing,
+#   dg.DynamicOut,
+#   dg.DynamicOutput,
+#   dg.MaterializeResult,
+#   dg.MetadataValue,
+# )
 from pathlib import Path
 import os
 import duckdb
@@ -31,7 +29,7 @@ _DUCKDB_CONFIG = {
 
 
 def connect_duckdb(read_only: bool = False):
-  con = duckdb.connect(_DUCKDB_URI, read_only=read_only, config=_DUCKDB_CONFIG)
+  con = duckdb.connect(_DUCKDB_URI, read_only=read_only)
   # PRAGMAs after connect (don’t affect the “same config” rule)
   con.execute("PRAGMA threads=4")
   con.execute("PRAGMA temp_directory='/tmp/duckdb-temp'")
@@ -43,24 +41,24 @@ DEFAULT_FEATURES_TABLE = "er.pair_features"
 DEFAULT_SCORES_TABLE = "er.pair_scores"
 DEFAULT_SCORED_FEATURES_TABLE = "er.pair_features_scored"
 DEFAULT_MODEL_PATH = "models/er_pair_clf.joblib"
-DEFAULT_OUT_DIR = "data/er/pair_scores_shards"
+DEFAULT_OUT_DIR = "/tmp/dagster/data/er/pair_scores_shards"
 #This will thrash a bit and swap a lot using 64 shards on my m3 mac
 #DEFAULT_SHARDS = int(os.getenv("SHARD_MODULUS", "64"))
-DEFAULT_SHARDS = 128
+DEFAULT_SHARDS = 512
 DEFAULT_DROP_ID = ["company_id_a", "company_id_b", "label"]  # must mirror your training
 
 
 # ---------- Cheap producer: emit shard indices (dependency-only trigger) ----------
-@op(ins={"_trigger": In(Nothing)}, out=DynamicOut(int))
+@dg.op(ins={"_trigger": dg.In(dg.Nothing)}, out=dg.DynamicOut(int))
 def emit_score_shard_indices():
   for i in range(DEFAULT_SHARDS):
-    yield DynamicOutput(i, mapping_key=str(i))
+    yield dg.DynamicOutput(i, mapping_key=str(i))
 
 
 # ---------- Heavy worker: score one shard and write Parquet ----------
 
 
-@op(out=Out(str, io_manager_key="ephemeral_parquet_io"))
+@dg.op(out=dg.Out(str, io_manager_key="ephemeral_parquet_io"))
 def score_pairs_shard(
   shard_index: int,
   features_table: str = DEFAULT_FEATURES_TABLE,
@@ -69,6 +67,10 @@ def score_pairs_shard(
   shard_modulus: int = DEFAULT_SHARDS,
   drop_id_cols: list[str] = DEFAULT_DROP_ID,
 ):
+  """
+  This is a super heavy operation! We try to keep it somewhat performant by keeping
+  shards high (smaller join sets)
+  """
   out_base = Path(out_dir)
   out_base.mkdir(parents=True, exist_ok=True)
   out_path = out_base / f"shard={shard_index}.parquet"
@@ -108,69 +110,85 @@ def score_pairs_shard(
 
 
 # ---------- Fan-in: union shards → DuckDB tables; cleanup shards ----------
-@op
+@dg.op
 def union_scores_and_cleanup(
+  context,
   shard_paths: list[str],
   features_table: str = DEFAULT_FEATURES_TABLE,
   scores_table: str = DEFAULT_SCORES_TABLE,
   scored_features_table: str = DEFAULT_SCORED_FEATURES_TABLE,
-) -> MaterializeResult:
+) -> dg.MaterializeResult:
   from glob import glob
   # Identify the directory and glob
   if not shard_paths:
     raise RuntimeError("No shard paths provided.")
   shard_dir = Path(shard_paths[0]).parent
   glob_pat = str(shard_dir / "shard=*.parquet")
-
+  context.log.info(f"Scoring completed with {len(shard_paths)} shards.")
+  context.log.info(f"creating {scores_table}")
   con = connect_duckdb(read_only=False)
   try:
     con.execute("CREATE SCHEMA IF NOT EXISTS er")
     # Build scores table from shards
+    # scan is theoretically faster than read
+    scan_sql = f"""CREATE OR REPLACE TABLE er.pair_scores AS
+    SELECT * FROM parquet_scan($glob)"""
+    read_sql = f"""CREATE OR REPLACE TABLE {scores_table} AS
+      SELECT * FROM read_parquet($glob)"""
     con.execute(
-      f"CREATE OR REPLACE TABLE {scores_table} AS "
-      f"SELECT * FROM read_parquet($glob)",
+      scan_sql,
       {"glob": glob_pat},
     )
     # Join scores onto features
-    con.execute(f"""
-            CREATE OR REPLACE TABLE {scored_features_table} AS
-            SELECT f.*, s.model_score
-            FROM {features_table} f
-            LEFT JOIN {scores_table} s
-              USING (company_id_a, company_id_b)
-        """)
+    # shouldn't produce dupes
+    # maybe don't need to actually materialize the scores?
+    scored_features = "er.v_pair_features_scored"
+    scored_features_v = f"""CREATE OR REPLACE VIEW {scored_features} AS
+      SELECT f.*, s.model_score
+      FROM er.pair_features f
+      LEFT JOIN er.pair_scores s USING (company_id_a, company_id_b);"""
+    con.execute(scored_features_v)
+    # scored_features = f"""CREATE OR REPLACE TABLE {scored_features_table} AS
+    #       SELECT f.*, s.model_score
+    #       FROM (
+    #         SELECT DISTINCT company_id_a, company_id_b, * EXCLUDE(company_id_a, company_id_b)
+    #         FROM {features_table}
+    #       ) f
+    #       LEFT JOIN {scores_table} s USING (company_id_a, company_id_b);
+    #   """
+    # con.execute(scored_features)
     total_scores = con.execute(f"SELECT COUNT(*) FROM {scores_table}").fetchone()[0]
     total_scored_features = con.execute(
-      f"SELECT COUNT(*) FROM {scored_features_table}").fetchone()[0]
+      f"SELECT COUNT(*) FROM {scored_features}").fetchone()[0]
   finally:
     con.close()
 
   # Best-effort cleanup of shard files (optional—comment out if you want to keep them)
-  for p in shard_paths:
-    try:
-      Path(p).unlink(missing_ok=True)
-    except Exception:
-      pass
+  # for p in shard_paths:
+  #   try:
+  #     Path(p).unlink(missing_ok=True)
+  #   except Exception:
+  #     pass
 
-  return MaterializeResult(
+  return dg.MaterializeResult(
     metadata={
-      "scores_rows": MetadataValue.int(total_scores),
-      "scored_features_rows": MetadataValue.int(total_scored_features),
-      "scores_table": MetadataValue.text(scores_table),
-      "scored_features_table": MetadataValue.text(scored_features_table),
-      "shard_dir": MetadataValue.path(str(shard_dir)),
+      "scores_rows": dg.MetadataValue.int(total_scores),
+      "scored_features_rows": dg.MetadataValue.int(total_scored_features),
+      "scores_table": dg.MetadataValue.text(scores_table),
+      "scored_features_table": dg.MetadataValue.text(scored_features),
+      "shard_dir": dg.MetadataValue.path(str(shard_dir)),
     })
 
 
 # ---------- Graph-backed asset wiring ----------
-@graph_asset(
+@dg.graph_asset(
   name="er_pair_scores",
   group_name="er",
   # depend on upstream features so +er_pair_scores pulls it in
-  ins={"er_pair_features": AssetIn(dagster_type=Nothing)},
+  ins={"er_pair_features": dg.AssetIn(dagster_type=dg.Nothing)},
 )
 def er_pair_scores_graph(er_pair_features):
-  # consume upstream dep as a trigger (Nothing) to enforce ordering
+  # consume upstream dep as a trigger (dg.Nothing) to enforce ordering
   indices = emit_score_shard_indices(er_pair_features)
 
   # map scoring across shards (parallel when using multiprocess executor)

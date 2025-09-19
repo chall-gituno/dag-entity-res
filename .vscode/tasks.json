@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run DuckDB SQL (active file)",
+      "type": "process",
+      "command": "uv",
+      "args": [
+        "run",
+        "${workspaceFolder}/tests/run_duck_query.py",
+        "-f", "${file}",
+      ],
+      "problemMatcher": [],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "options": {
+        "env": {
+          // If you want to force a .env file load, leave as-is (script calls load_dotenv()).
+          // You can also put DUCKDB_DATABASE here if you don't want to rely on .env.
+        }
+      }
+    }
+  ]
+}

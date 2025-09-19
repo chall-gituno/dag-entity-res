@@ -1,13 +1,19 @@
+-- blocking_pairs_shard.parquet.sql.j2
 -- Params:
 --   blocks_table   : e.g. er.blocks_adaptive
 --   shard_index    : 0..(shard_modulus-1)
 --   shard_modulus  : e.g. 64 or 256
+--   cap_per_a      : optional INT (None/Null = no cap)
+--   bkey_hash_col  : optional column already holding a hash, e.g. 'bkey_hash'
+
+{# Choose existing hash col or compute from kind|bkey #}
 {% if bkey_hash_col %}
   {% set HASH_EXPR = bkey_hash_col %}
 {% else %}
   {% set HASH_EXPR = "hash(kind || '|' || bkey)" %}
 {% endif %}
 
+{# Use non-negative modulo trick to avoid bit ops & negatives #}
 WITH shard AS (
   SELECT *
   FROM {{ blocks_table }}
@@ -24,6 +30,22 @@ pairs AS (
     ON a.kind = b.kind
    AND a.bkey = b.bkey
    AND b.company_id > a.company_id
+),
+dedup AS (
+  SELECT DISTINCT company_id_a, company_id_b
+  FROM pairs
 )
--- using in a copy statement so NO ;
-select * from pairs
+{% if cap_per_a is not none %}
+, ranked AS (
+  SELECT
+    company_id_a,
+    company_id_b,
+    ROW_NUMBER() OVER (PARTITION BY company_id_a ORDER BY company_id_b) AS rn
+  FROM dedup
+)
+SELECT company_id_a, company_id_b
+FROM ranked
+WHERE rn <= {{ cap_per_a }}
+{% else %}
+SELECT * FROM dedup
+{% endif %}

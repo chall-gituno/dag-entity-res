@@ -1,16 +1,7 @@
 import os, glob
 from pathlib import Path
-from dagster import (
-  op,
-  graph_asset,
-  DynamicOut,
-  DynamicOutput,
-  Out,
-  AssetIn,
-  In,
-  Nothing,
-)
-from typing import List
+import dagster as dg
+
 import duckdb as duckdblib
 from resolver.defs.resources import DuckDBResource
 from resolver.defs.sql_utils import render_sql
@@ -21,14 +12,14 @@ COMPANIES_TABLE = "silver.companies"
 OUT_DIR = Path("data/er/tmp_features_shards")
 
 
-@op(ins={"_trigger": In(Nothing)}, out=DynamicOut(int))
+@dg.op(ins={"_trigger": dg.In(dg.Nothing)}, out=dg.DynamicOut(int))
 def emit_shard_indices(er_blocking_pairs):
   # this op is cheap; it just yields integers
   for i in range(SHARD_MODULUS):
-    yield DynamicOutput(i, mapping_key=str(i))
+    yield dg.DynamicOutput(i, mapping_key=str(i))
 
 
-@op(out=Out(str, io_manager_key="ephemeral_parquet_io"))
+@dg.op(out=dg.Out(str, io_manager_key="ephemeral_parquet_io"))
 def build_feature_shard(shard_index: int,
                         pairs_table: str = "er.blocking_pairs",
                         companies_table: str = "silver.companies",
@@ -61,8 +52,8 @@ def build_feature_shard(shard_index: int,
   return str(out_path)
 
 
-@op
-def union_and_cleanup(paths: list[str]) -> int:
+@dg.op
+def union_and_cleanup(context, paths: list[str]) -> int:
   con = duckdblib.connect(os.getenv("DUCKDB_DATABASE"))
   try:
     con.execute("PRAGMA threads=4")
@@ -96,10 +87,10 @@ def union_and_cleanup(paths: list[str]) -> int:
   return total
 
 
-@graph_asset(
+@dg.graph_asset(
   name="er_pair_features",
   group_name="er",
-  ins={"er_blocking_pairs": AssetIn(dagster_type=Nothing)},
+  ins={"er_blocking_pairs": dg.AssetIn(dagster_type=dg.Nothing)},
 )
 def er_pair_features_graph(er_blocking_pairs):
   """
@@ -121,3 +112,26 @@ def er_pair_features_graph(er_blocking_pairs):
   # # Fan-in (union) + cleanup
   # total = union_and_cleanup(shard_paths)
   # return total
+
+
+@dg.asset_check(asset=dg.AssetKey("er_pair_features"))
+def pair_features_unique_pairs_check(context, duckdb: DuckDBResource):
+  """
+    Assure that we have unique pairs in our features output
+  """
+  with duckdb.get_connection() as con:
+    dup_cnt = con.execute("""
+          SELECT COUNT(*) FROM (
+            SELECT company_id_a, company_id_b, COUNT(*) AS c
+            FROM er.pair_features
+            GROUP BY 1,2
+            HAVING COUNT(*) > 1
+          )
+        """).fetchone()[0]
+
+  return dg.AssetCheckResult(
+    passed=(dup_cnt == 0),
+    severity=dg.AssetCheckSeverity.ERROR,
+    description="No duplicate (company_id_a, company_id_b) pairs expected.",
+    metadata={"duplicate_pairs": dup_cnt},
+  )
