@@ -1,4 +1,4 @@
-# src/resolver/defs/assets/er_pair_scores_stream.py
+# src/resolver/defs/assets/er_pair_scores.py
 from __future__ import annotations
 import os
 from pathlib import Path
@@ -8,6 +8,7 @@ import joblib
 import pyarrow as pa
 import pyarrow.parquet as pq
 from resolver.defs.resources import DuckDBResource
+from resolver.defs.settings import ERSettings
 
 
 def _connect_duckdb(db_uri: str, read_only: bool = True) -> duckdb.DuckDBPyConnection:
@@ -21,7 +22,7 @@ def _connect_duckdb(db_uri: str, read_only: bool = True) -> duckdb.DuckDBPyConne
 
 
 @dg.asset(
-  name="er_pair_scores_stream",
+  name="er_pair_scores",
   group_name="er",
   deps=[dg.AssetKey("er_pair_features")],
   compute_kind="python",
@@ -29,13 +30,13 @@ def _connect_duckdb(db_uri: str, read_only: bool = True) -> duckdb.DuckDBPyConne
     "Stream-score er.pair_features with a saved sklearn Pipeline using batches. "
     "Writes Parquet → creates er.pair_scores, and a view er.v_pair_features_scored."),
 )
-def er_pair_scores_stream(context, duckdb: DuckDBResource) -> dg.MaterializeResult:
+def er_pair_scores(context, duckdb: DuckDBResource,
+                   settings: ERSettings) -> dg.MaterializeResult:
   # ------- Configs (override via run config if desired) -------
-  features_table: str = context.op_config.get("features_table", "er.pair_features")
-  model_path: str = context.op_config.get("model_path", "models/er_pair_clf.joblib")
-  out_parquet: str = context.op_config.get("out_parquet",
-                                           "data/er/pair_scores_stream/score.parquet")
-  batch_size: int = int(context.op_config.get("batch_size", 100_000))
+  features_table: str = "er.pair_features"
+  model_path: str = settings.model_path
+  out_parquet: str = settings.score_parquet_path
+  batch_size: int = settings.batch_size
   # ------------------------------------------------------------
 
   # Load model (expects a Pipeline with a ColumnTransformer named "pre")

@@ -2,6 +2,7 @@ import dagster as dg
 
 from dagster_duckdb import DuckDBResource
 from resolver.defs.iomanagers import EphemeralParquetIOManager
+from resolver.defs.settings import ERSettings
 
 # from dagster_dbt import DbtCliResource
 # from dagster_exp.defs.project import dbt_project
@@ -15,6 +16,8 @@ defs = dg.Definitions(
     "duckdb":
     duckdb_resource,
     "ephemeral_parquet_io":
-    EphemeralParquetIOManager(base_dir="data/er/tmp_features_shards")
+    EphemeralParquetIOManager(base_dir="data/er/tmp_features_shards"),
+    "settings":
+    ERSettings(),
     #"dbt": dbt_resource,
   }, )

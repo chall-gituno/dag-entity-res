@@ -18,4 +18,5 @@
 --   GROUP BY 1,2
 -- )
 -- SELECT SUM(CASE WHEN c>1 THEN c-1 ELSE 0 END) AS duplicate_rows FROM g;
-
+CREATE OR REPLACE TABLE er.pair_scores_test AS
+SELECT * FROM parquet_scan('data/er/pair_scores_shards/shard=*.parquet');

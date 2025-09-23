@@ -1,4 +1,4 @@
-from dagster import define_asset_job, multiprocess_executor
+from dagster import define_asset_job, multiprocess_executor, AssetSelection
 #from resolver.defs.assets.er_blocks import er_blocks_adaptive
 
 # ---- Jobs (asset selections) ----
@@ -21,23 +21,47 @@ features_job = define_asset_job(
   executor_def=multiprocess_executor.configured({"max_concurrent": 4}),
 )
 
-full_build = define_asset_job(
-  name="full_build",
-  selection='+key:"er_pair_features"',
-  executor_def=multiprocess_executor.configured({"max_concurrent": 4}),
-)
-
 # max_concurrent of 2 takes a while but at
 # least the machine still operates
+# scoring_jog_sharded = define_asset_job(
+#   name="scoring_jog_sharded",
+#   selection='key:"er_pair_scores_sharded"',
+#   executor_def=multiprocess_executor.configured({"max_concurrent": 2}),
+# )
+
 scoring_job = define_asset_job(
   name="scoring_job",
   selection='key:"er_pair_scores"',
+  executor_def=multiprocess_executor.configured({"max_concurrent": 1}),
+)
+matching_selection = AssetSelection.keys(
+  "er_pair_matches",
+  "er_pair_labels",
+  "er_entities",
+)
+
+matching_job = define_asset_job(
+  name="matching_job",
+  selection=matching_selection,
+  executor_def=multiprocess_executor.configured({"max_concurrent": 1}),
+  tags={
+    "owner": "er",
+    "layer": "matching"
+  },
+)
+# uv run dagster asset materialize -m resolver.definitions --select 'key:"sanity_*"'
+sanity_job = define_asset_job(
+  name="sanity_job",
+  selection='key:"sanity_*"',
   executor_def=multiprocess_executor.configured({"max_concurrent": 2}),
 )
-scoring_job_streaming = define_asset_job(
-  name="scoring_job_streaming",
-  selection='key:"er_pair_scores_stream"',
-  executor_def=multiprocess_executor.configured({"max_concurrent": 1}),
+
+# NOTE: the '+' here will force a rebuild of all upstream
+# dependencies regardless of whether they need them or not
+full_build = define_asset_job(
+  name="full_build",
+  selection='+key:"er_entities"',
+  executor_def=multiprocess_executor.configured({"max_concurrent": 4}),
 )
 # ---- Concurrency limit (extra guardrail; optional if you use jobs) ----
 # Keeps ANY ad-hoc runs from blasting too many feature shards at once.

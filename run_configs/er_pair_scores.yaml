@@ -1,7 +1,7 @@
 ops:
-  er_pair_scores_stream:
+  er_pair_scores:
     config:
       features_table: "er.pair_features"          # or an aggregated view/table
       model_path: "models/er_pair_clf.joblib"     # your saved sklearn Pipeline
-      out_parquet: "data/er/pair_scores_stream/score.parquet"
-      batch_size: 100000
+      out_parquet: "data/er/pair_scores/score.parquet"
+      batch_size: 10000000
