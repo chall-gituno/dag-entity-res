@@ -11,9 +11,7 @@ data/
 
 .dagster_home
 
-# USUALLY, you would not add .env files
-# but these are innocuous
-#.env*
+.env*
 
 # Virtual environments
 .venv

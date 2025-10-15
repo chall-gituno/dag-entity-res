@@ -94,7 +94,10 @@ def union_and_cleanup(context, paths: list[str]) -> int:
 )
 def er_pair_features_graph(er_blocking_pairs):
   """
-  Generate the pair features from our pairs
+  Generate the pair features from our blocking pairs.
+  WARNING! This is will push your system to the limit or beyond.
+  TODO: this needs to be converted to a batch/streaming implementation
+  rather than the current sharding implementation
   """
   # graph_asset doesn't have a deps so we use ins...and it expects that the 'in' is consumed
   # so we pass it on to the first op (and ignore it)
