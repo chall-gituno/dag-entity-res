@@ -1,0 +1,11 @@
+DUCKDB_DATABASE=/opt/test-data/experimental.duckdb
+COMPANY_FILE=/opt/test-data/companies.zip
+ER_STOPWORDS=inc,llc,ltd,corp,co,company,corporation,plc,pty,ag,nv,sa,spa,gmbh,srl,sro,oy,bv,ab,as,kk,ltda,kft,ooo,oyj,aps,holdings,group,international,national,global,worldwide,enterprises,enterprise,industries,industry,partners,solutions,systems,services,technologies,technology,ventures,associates,resources,logistics,communications,consulting,capital,management,media,marketing,distribution,distributing,manufacturing,manufacturers,products,product,the,and,of,for,from,with,without,north,south,east,west,central,northeast,northwest,southeast,southwest,midwest,midwestern,western,eastern,southern,northern,america,american,americas,regional,community,public,state,states,federal,blue,green,red,white,black,golden,silver,bright,prime,first,one,united,universal,general,common,prime
+SHARD_MODULUS=64
+DUMP_QUERIES=False
+
+
+
+ER_MODEL_PATH=/path/to/models/er_pair_clf.joblib
+ER_SCORING_PARQUET= /tmp/dagster-data/er/pair_scores/score.parquet
+#ER_BATCH_SIZE= 10000000
