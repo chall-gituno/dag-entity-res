@@ -1,5 +1,3 @@
-NOTICE: This repository is published as a curated, read-only snapshot. We are not accepting pull requests, issues, or contributions. See CONTRIBUTING.md for details.
-
 # Entity Resolution
 
 The ongoing and nagging problem of many data systems...
