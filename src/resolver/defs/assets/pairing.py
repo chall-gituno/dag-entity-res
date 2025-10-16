@@ -4,17 +4,7 @@ from typing import List
 from resolver.defs.resources import DuckDBResource
 from resolver.defs.sql_utils import render_sql
 import dagster as dg
-# from dagster import (
-#   op,
-#   graph_asset,
-#   DynamicOut,
-#   DynamicOutput,
-#   Out,
-#   In,
-#   AssetIn,
-#   AssetKey,
-#   Nothing,
-# )
+
 import duckdb as duckdblib
 
 SHARD_MODULUS = int(os.getenv("SHARD_MODULUS", "64"))

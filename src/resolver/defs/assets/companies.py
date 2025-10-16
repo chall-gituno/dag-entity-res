@@ -11,6 +11,8 @@ from resolver.defs.sql_utils import render_sql
 def get_companies() -> str:
   """
   Would usually get it from an api or whatever (this came from kaggle)
+  I think it came from https://www.kaggle.com/datasets/rsaishivani/companies-database
+  but there are several others with similar name/size/fields
   """
   path = os.getenv("COMPANY_FILE", "/opt/test-data/companies.zip")
   return path
@@ -38,19 +40,12 @@ def expand_companies(companies_raw: str) -> dict:
   # Collect CSVs
   csvs = sorted(str(p) for p in base.rglob("*.csv"))
   if not csvs:
-    # Surface a crisp failure so it shows clearly in the UI
     raise dg.Failure(f"No CSV files found after expanding {zip_path} into {base}")
   payload = {"dir": str(base), "csvs": csvs}
-  # context.log.info(f"Expanded {zip_path} to {base} with {len(csvs)} CSVs")
-  # context.add_output_metadata({
-  #   "expanded_dir": str(base),
-  #   "csv_count": len(csvs),
-  #   "sample_files": csvs[:5],
-  # })
   return payload
 
 
-@dg.asset(group_name="ingested")
+@dg.asset(group_name="bronze", tags={"quality": "raw"})
 def companies(context: dg.AssetExecutionContext, duckdb: DuckDBResource) -> None:
   """
   Loads the expanded CSVs into DuckDB (bronze.companies).
@@ -81,7 +76,7 @@ def companies(context: dg.AssetExecutionContext, duckdb: DuckDBResource) -> None
     context.log.info(f"bronze.companies loaded with {n} rows from {glob_pattern}")
 
 
-@dg.asset(deps=["companies"], group_name="ingested")
+@dg.asset(deps=["companies"], group_name="silver", tags={"quality": "clean"})
 def clean_companies(context: AssetExecutionContext, duckdb: DuckDBResource) -> str:
   """Apply cleaning and normalization to our raw data.  output result to silver schema"""
   sql = render_sql("clean_kag_comp.sql.j2",

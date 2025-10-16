@@ -9,3 +9,7 @@ DUMP_QUERIES=False
 ER_MODEL_PATH=/path/to/models/er_pair_clf.joblib
 ER_SCORING_PARQUET= /tmp/dagster-data/er/pair_scores/score.parquet
 #ER_BATCH_SIZE= 10000000
+
+# If you want to run AI asset checks...
+OPENAI_API_KEY=sk-xyz123
+AI_MODEL=gpt-3.5-turbo

@@ -1,20 +1,25 @@
 import os
 import dagster as dg
-from dagster import AssetExecutionContext, MaterializeResult, MetadataValue
+
 from dagster_duckdb import DuckDBResource
 from resolver.defs.sql_utils import render_sql
+import json
+from resolver.defs.ai_utils import call_ai, render_prompt
+from resolver.defs.utils import normalize_metadata
 
 stopwords_env = os.getenv("ER_STOPWORDS", "")
 stopwords_list = [w.strip() for w in stopwords_env.split(",") if w.strip()]
 
 
-@dg.asset(deps=["clean_companies"], group_name="er")
-def er_company_blocking(context: AssetExecutionContext,
-                        duckdb: DuckDBResource) -> MaterializeResult:
+@dg.asset(deps=["clean_companies"], group_name="er", tags={"quality": "working"})
+def er_company_blocking(context, duckdb: DuckDBResource):
   """
      This will create ONLY blocks using a staged/adaptive approach. The idea here is to avoid
-     human trial and error to determine optimal blocking strategy
-   """
+     human trial and error to determine optimal blocking strategy.
+  """
+
+  # Most of these params are for experimenting, debugging, refining
+  # TODO: get 'em from the context
   sql = render_sql(
     "create_blocks_adaptive.sql.j2",
     source_table="silver.companies",
@@ -37,7 +42,7 @@ def er_company_blocking(context: AssetExecutionContext,
   with duckdb.get_connection() as con:
     con.execute("PRAGMA temp_directory='/tmp/duckdb-temp'")
     con.execute("PRAGMA memory_limit='10GB'")
-    con.execute("PRAGMA threads=4")
+    # Produce our blocking tables
     con.execute(sql)
     # Collect metrics
     kept_cnt = con.execute("SELECT COUNT(*) FROM er.blocks_adaptive").fetchone()[0]
@@ -75,20 +80,89 @@ def er_company_blocking(context: AssetExecutionContext,
         LIMIT 10
     """).fetch_df()
 
-    # 3) Emit rich metadata to Dagster
-    return MaterializeResult(
+    outcome = {
+      "blocks_kept_rows": kept_cnt,
+      "blocks_heavy_rows": heavy_cnt,
+      "kept_blocks_total": int(blocks_total),
+      "kept_max_block_size": int(max_kept),
+      "kept_avg_block_size": float(avg_kept),
+      "kept_p90_block_size": float(p90_kept),
+      "est_pairs_total": int(est_pairs_total),
+      "heavy_blocks_top10_json": top_heavy.to_dict("records"),
+      "sql_template": "create_blocks_adaptive.sql.j2",
+    }
+    return dg.Output(
+      value=outcome,
       metadata={
-        "blocks_kept_rows": MetadataValue.int(kept_cnt),
-        "blocks_heavy_rows": MetadataValue.int(heavy_cnt),
-        "kept_blocks_total": MetadataValue.int(int(blocks_total)),
-        "kept_max_block_size": MetadataValue.int(int(max_kept)),
-        "kept_avg_block_size": MetadataValue.float(float(avg_kept)),
-        "kept_p90_block_size": MetadataValue.float(float(p90_kept)),
-        "est_pairs_total": MetadataValue.int(int(est_pairs_total)),
-        #"heavy_blocks_top10_md": MetadataValue.md(top_heavy.to_markdown(index=False)),
-        "heavy_blocks_top10_json": MetadataValue.json(top_heavy.to_dict("records")),
-        "sql_template": MetadataValue.text("create_blocks_adaptive.sql.j2"),
-      })
+        "blocks_kept_rows": kept_cnt,
+        "blocks_heavy_rows": heavy_cnt,
+      },
+    )
+
+
+def get_ai_opinion(metadata):
+  exclude = {"heavy_blocks_top10_json", "sql_template"}
+  filtered = {k: v for k, v in metadata.items() if k not in exclude}
+  stats = json.dumps(filtered, indent=2)
+  heavy = json.dumps(metadata.get("heavy_blocks_top10_json"), indent=2)
+
+  prompt = render_prompt("blocking_check.text.j2", {
+    "stats": stats,
+    "heavy_blocks": heavy,
+  })
+
+  ai_comment = call_ai(prompt)
+  return ai_comment
+
+
+@dg.op
+def validate_blocking(context) -> str:
+  if not os.getenv("OPENAI_API_KEY"):
+    context.log.info("AI validation will be skipped")
+    return
+
+  # Get the latest materialization event for your asset
+  asset_key = dg.AssetKey(["er_company_blocking"])
+
+  # Get the latest materialization event
+  last_mat_event = context.instance.get_latest_materialization_event(asset_key)
+
+  if not last_mat_event:
+    context.log.warning("No materialization found for asset")
+    return
+
+  # Access the metadata from the materialization
+  materialization = last_mat_event.asset_materialization
+  md = materialization.metadata
+  normalized = normalize_metadata(md)
+  ai_comment = get_ai_opinion(normalized)
+  context.add_output_metadata({"ai_summary": dg.MetadataValue.text(ai_comment)})
+
+
+@dg.job
+def ai_blocking_check_job():
+  """
+  Manually run a check of our blocking strategy using AI.
+  """
+  validate_blocking()
+
+
+# Attach a check on our asset...if we really cared about
+# AI's opnion here, we could set blocking=True
+@dg.asset_check(
+  asset=er_company_blocking,
+  name="ai_block_quality_check",
+  description="Get AI's opinion on our blocking efforts",
+)
+def ai_block_quality_check(context, er_company_blocking):
+  if not os.getenv("OPENAI_API_KEY"):
+    context.log.info("AI validation will be skipped")
+    return dg.AssetCheckResult(passed=True)
+  ai_comment = get_ai_opinion(er_company_blocking)
+  return dg.AssetCheckResult(
+    passed=True,
+    metadata={"ai_analysis": dg.MetadataValue.text(ai_comment)},
+  )
 
 
 @dg.asset(deps=["clean_companies"])
@@ -110,29 +184,3 @@ def company_block_pair_with_stats(duckdb: DuckDBResource):
   )
   with duckdb.get_connection() as con:
     con.execute(sql)
-
-
-# @dg.asset(deps=["clean_companies"])
-# def create_blocks(duckdb: DuckDBResource):
-#   """
-#      This will create ONLY blocks - will need to shard and pair downstream
-#      We do this to avoid blowing out memory
-#    """
-#   sql = render_sql(
-#     "create_blocks.sql.j2",
-#     source_table="silver.companies",
-#     target_schema="er",
-#     id_col="company_id",
-#     name_col="company_name",
-#     domain_col="domain_name",
-#     city_col="city",
-#     country_col="final_country",
-#     use_domain=True,
-#     use_name3_country=True,
-#     use_compact5_city=True,
-#     max_block_size=1000,
-#   )
-#   with duckdb.get_connection() as con:
-#     con.execute("PRAGMA temp_directory='/tmp/duckdb-temp'")
-#     con.execute(sql)
-#   return "er.company_blocks"

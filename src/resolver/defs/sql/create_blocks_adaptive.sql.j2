@@ -1,4 +1,4 @@
--- create_blocks_adaptive.sql.j2  (with Stage-3 refinement spliced in)
+-- create_blocks_adaptive.sql.j2
 -- Params:
 --   source_table, target_schema, id_col, name_col, domain_col, city_col, country_col
 --   max_block_size
@@ -10,7 +10,7 @@
 
 CREATE SCHEMA IF NOT EXISTS {{ target_schema }};
 
--- 0) Base normalization (temp)
+-- 0) Base normalization (temp).
 CREATE OR REPLACE TEMP TABLE tmp_base AS
 SELECT
   {{ id_col }}::BIGINT                       AS company_id,
@@ -64,7 +64,9 @@ CREATE OR REPLACE TEMP TABLE tmp_big1 AS
 SELECT d.*, s.n FROM tmp_dedup1 d JOIN tmp_sizes1 s USING(kind,bkey)
 WHERE s.n > {{ max_block_size }};
 
--- 2) Stage-2 refinement of big₁
+-- 2) Stage-2 refinement of big1. 
+-- In other words, try to break our big blocks down further
+-- through more specificity
 CREATE OR REPLACE TEMP TABLE tmp_refined2 AS
 -- name3_country → name4_country
 SELECT b.company_id, 'name4_country' AS kind,
@@ -104,11 +106,11 @@ CREATE OR REPLACE TEMP TABLE tmp_big2 AS
 SELECT d.*, s.n FROM tmp_dedup2 d JOIN tmp_sizes2 s USING(kind,bkey)
 WHERE s.n > {{ max_block_size }};
 
--- =========================
+{% if enable_stage3_token %}
 -- 3) Stage-3 (token-based) refinement of STILL-large Stage-2 blocks
 --     Target: name4_country buckets that remain > max_block_size
 -- =========================
-{% if enable_stage3_token %}
+
 -- stopwords → temp table
 CREATE OR REPLACE TEMP TABLE tmp_stopwords AS
 SELECT TRIM(value) AS sw
@@ -132,6 +134,7 @@ tok_raw AS (
   SELECT company_id, country, UNNEST(string_split(name_spaces, ' ')) AS tok
   FROM names
 ),
+-- And then strip the noise (stop words)
 tok_clean AS (
   SELECT company_id, country, tok
   FROM tok_raw
@@ -139,9 +142,10 @@ tok_clean AS (
     AND LENGTH(tok) >= {{ stage3_min_token_len }}
     AND tok NOT IN (SELECT sw FROM tmp_stopwords)
 )
-SELECT company_id, country, tok           -- 👈 consume the CTEs
+SELECT company_id, country, tok
 FROM tok_clean
 ; 
+
 -- compute token document frequency per country (df)
 CREATE OR REPLACE TEMP TABLE tmp_s3_tok_df AS
 SELECT country, tok, COUNT(*) AS df

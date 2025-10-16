@@ -11,7 +11,7 @@ data/
 
 .dagster_home
 
-.env*
+*.env*
 
 # Virtual environments
 .venv

@@ -11,13 +11,11 @@ duckdb_resource = DuckDBResource(database=dg.EnvVar("DUCKDB_DATABASE"), )
 
 #dbt_resource = DbtCliResource(project_dir=dbt_project, )
 
-defs = dg.Definitions(
-  resources={
-    "duckdb":
-    duckdb_resource,
-    "ephemeral_parquet_io":
-    EphemeralParquetIOManager(base_dir="data/er/tmp_features_shards"),
-    "settings":
-    ERSettings(),
-    #"dbt": dbt_resource,
-  }, )
+defs = dg.Definitions(resources={
+  "duckdb":
+  duckdb_resource,
+  "ephemeral_parquet_io":
+  EphemeralParquetIOManager(base_dir="data/er/tmp_features_shards"),
+  "settings":
+  ERSettings(),
+}, )

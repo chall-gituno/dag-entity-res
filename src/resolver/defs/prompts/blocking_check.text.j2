@@ -1,0 +1,19 @@
+You are evaluating the quality of a company data blocking step in an entity resolution pipeline.
+Below are key metrics produced by the blocking process:
+
+{{stats}}
+
+The largest 10 "heavy" blocks (high-frequency keys) are:
+{{heavy_blocks}}
+
+Explain whether the blocking looks well-balanced or not.
+
+Specifically:
+- Are there too many large blocks (risk of performance/memory explosion)?
+- Is the estimated pair count reasonable for a dataset of this scale?
+- Which blocking keys look suspiciously overgeneralized?
+- Suggest simple next steps (e.g. add stopwords, adjust token lengths, split kinds).
+
+Your response should consist of two parts:
+1. Recommendation - a concise one word suggestion that is either 'accept' or 'rework'
+2. Reasoning - 3 to 5 concise sentences with an explanation of our analysis and Recommendation.
