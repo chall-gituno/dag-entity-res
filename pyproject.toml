@@ -1,0 +1,49 @@
+[project]
+name = "resolver"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Colin Hall", email = "238315223+chall-gituno@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "dagster>=1.11.10",
+    "dagster-duckdb>=0.27.10",
+    "ipykernel>=6.30.1",
+    "jinja2>=3.1.6",
+    "openai>=2.4.0",
+    "pandas>=2.3.2",
+    "pyarrow>=21.0.0",
+    "scikit-learn>=1.7.2",
+]
+[dependency-groups]
+dev = [
+    "dagster-webserver",
+    "dagster-dg-cli",
+    "pytest>=8.4.2",
+    "pytest-check>=2.5.4",
+]
+[build-system]
+requires = ["hatchling>=1.26", "hatch-vcs>=0.4"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+tag-pattern = "v(?P<version>.*)"  # tag releases like v0.3.2
+
+[tool.hatch.build.targets.wheel]
+# Equivalent to setuptools' `package-dir` and find rules
+packages = ["src/resolver"]
+
+# Include Jinja SQL templates
+include = [
+  "src/resolver/defs/sql/*.sql.j2",
+]
+
+[tool.dg]
+directory_type = "project"
+
+[tool.dg.project]
+root_module = "resolver"
+
