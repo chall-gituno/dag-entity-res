@@ -1,11 +1,4 @@
 -- blocking_pairs_shard.sql.j2
--- Params:
---   target_schema    : e.g. er
---   blocks_table     : e.g. er.blocks_adaptive
---   shard_index      : 0..(shard_modulus-1)
---   shard_modulus    : e.g. 64
---   cap_per_a        : optional INT (None/Null = no cap)
---   bkey_hash_col    : optional column name that already holds a hash (e.g. 'bkey_hash')
 
 CREATE SCHEMA IF NOT EXISTS {{ target_schema }};
 

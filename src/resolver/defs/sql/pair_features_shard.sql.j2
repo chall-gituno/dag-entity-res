@@ -1,11 +1,5 @@
 -- pair_features_shard.sql.j2
--- Params:
---   shard_index      : 0..(shard_modulus-1)
---   shard_modulus    : e.g. 64
---   pairs_table      : er.blocking_pairs
---   companies_table  : silver.companies
--- Notes:
---   We compute only DB-cheap features here; heavier NLP can be done later in Python.
+
 
 WITH pairs_shard AS (
   SELECT *

@@ -1,22 +1,13 @@
 import os
 from pathlib import Path
 import dagster as dg
-import duckdb
+
 import joblib
 import pyarrow as pa
 import pyarrow.parquet as pq
 from resolver.defs.resources import DuckDBResource
 from resolver.defs.settings import ERSettings
-
-
-def _connect_duckdb(db_uri: str, read_only: bool = True) -> duckdb.DuckDBPyConnection:
-  con = duckdb.connect(db_uri, read_only=read_only)
-  # keep per-process memory/threading tame
-  con.execute("PRAGMA threads=1")
-  # You can tune this per box
-  con.execute(f"PRAGMA memory_limit='{os.getenv('DUCKDB_MEM', '6GB')}'")
-  con.execute(f"PRAGMA temp_directory='{os.getenv('DUCKDB_TMP', '/tmp/duckdb-temp')}'")
-  return con
+from resolver.defs.sql_utils import connect_duckdb
 
 
 @dg.asset(
@@ -60,8 +51,8 @@ def er_pair_scores(context, duckdb: DuckDBResource,
   raw_cols = [c for c in raw_cols if not (c in seen or seen.add(c))]
 
   # Stream rows from DuckDB
-  con_ro = _connect_duckdb(os.getenv("DUCKDB_DATABASE"), read_only=True)
-  # don't know why we'd need the order by here...it will just
+  con_ro = connect_duckdb(os.getenv("DUCKDB_DATABASE"), read_only=True)
+  # don't think we'd need the order by here...it will just
   # cause a delay in processing as it munges through it
   select_sql = f"""
       SELECT company_id_a, company_id_b, {", ".join(raw_cols)}

@@ -1,0 +1,161 @@
+import os
+from pathlib import Path
+from resolver.defs.resources import DuckDBResource
+import dagster as dg
+from resolver.defs.settings import ERSettings
+from resolver.defs.sql_utils import connect_duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from itertools import combinations
+import duckdb
+from pathlib import Path
+
+
+def stream_company_pairs(conn, blocks_table: str, batch_size: int = 10_000):
+  """
+  Stream company pairs in batches from DuckDB using record_batch iteration.
+  Preserves block grouping boundaries across batches.
+  """
+  current_key = None
+  block_rows = []
+  query = f"SELECT bkey, company_id FROM {blocks_table}"
+  reader = conn.execute(query).fetch_record_batch(batch_size)
+  while True:
+    # fetch a RecordBatch (Arrow-like structure)
+    batch = reader.read_next_batch()
+    if not batch or batch.num_rows == 0:
+      break
+
+    # Convert batch columns to Python lists
+    keys = batch.column(0).to_pylist()
+    ids = batch.column(1).to_pylist()
+
+    for block_key, company_id in zip(keys, ids):
+      if current_key is None:
+        current_key = block_key
+      if block_key != current_key:
+        # Finished collecting one block — emit all pairs
+        for a, b in combinations(block_rows, 2):
+          yield {
+            "company_id_a": a,
+            "company_id_b": b,
+            "bkey": current_key,
+          }
+        # start next block
+        block_rows = [company_id]
+        current_key = block_key
+      else:
+        block_rows.append(company_id)
+
+  # After all batches: flush the last block
+  for a, b in combinations(block_rows, 2):
+    yield {
+      "company_id_a": a,
+      "company_id_b": b,
+      "bkey": current_key,
+    }
+
+  # flush the last block
+  for a, b in combinations(block_rows, 2):
+    yield {
+      "company_id_a": a,
+      "company_id_b": b,
+      "bkey": current_key,
+    }
+  conn.close()
+
+
+@dg.asset(name="er_company_pairs", group_name="er", compute_kind="python")
+def er_company_pairs(context, duckdb: DuckDBResource, settings: ERSettings):
+  """
+  Stream company pairs into a temporary Parquet file, then load into DuckDB.
+  This avoids DuckDB concurrency issues.
+  """
+
+  tmp_parquet = Path("/tmp/data/er/company_pairs_stream.parquet")
+  tmp_parquet.parent.mkdir(parents=True, exist_ok=True)
+  blocks_table = "er.company_blocks"
+  out_table = "er.company_pairs"
+  batch_size = settings.batch_size or 10_000
+
+  schema = pa.schema([
+    ("company_id_a", pa.int64()),
+    ("company_id_b", pa.int64()),
+    ("bkey", pa.string()),
+  ])
+  writer = pq.ParquetWriter(tmp_parquet, schema)
+  total_pairs = 0
+  batch_count = 0
+  row_count = 0
+  current_key = None
+  block_rows = []
+
+  query = f"SELECT bkey, company_id FROM {blocks_table}"
+
+  with duckdb.get_connection() as conn:
+    reader = conn.execute(query).fetch_record_batch(batch_size)
+    while True:
+      try:
+        batch = reader.read_next_batch()
+      except StopIteration:
+        break
+      if batch.num_rows == 0:
+        context.log.info(f"No more data...Done.")
+        break
+      batch_count += 1
+      row_count += batch.num_rows
+      keys = batch.column(0).to_pylist()
+      ids = batch.column(1).to_pylist()
+      pairs_buffer = []
+      for block_key, company_id in zip(keys, ids):
+        if current_key is None:
+          current_key = block_key
+
+        if block_key != current_key:
+          # Emit pairs for completed block
+          for a, b in combinations(block_rows, 2):
+            pairs_buffer.append({
+              "company_id_a": a,
+              "company_id_b": b,
+              "bkey": current_key,
+            })
+          block_rows = [company_id]
+          current_key = block_key
+        else:
+          block_rows.append(company_id)
+      # write current batch’s pairs (so far)
+      if pairs_buffer:
+        table = pa.Table.from_pylist(pairs_buffer, schema=schema)
+        writer.write_table(table)
+        total_pairs += len(pairs_buffer)
+
+      if batch_count % 10 == 0:
+        context.log.info(
+          f"Processed {row_count:,} rows; emitted {total_pairs:,} pairs so far...")
+
+  writer.close()
+  context.log.info(
+    f"Done. {row_count:,} rows processed, {total_pairs:,} pairs written to {tmp_parquet}"
+  )
+
+  # single-writer phase: create table from parquet
+  with duckdb.get_connection() as conn:
+    conn.execute(f"""
+        CREATE SCHEMA IF NOT EXISTS er;
+        CREATE OR REPLACE TABLE {out_table} AS
+        SELECT * FROM read_parquet('{tmp_parquet.as_posix()}');
+    """)
+    cnt = conn.execute(f"SELECT COUNT(*) FROM {out_table}").fetchone()[0]
+
+  return dg.Output(
+    value={
+      "pairs_table": out_table,
+      "pairs_total": cnt
+    },
+    metadata={
+      "pairs_table": out_table,
+      "pairs_total": int(cnt),
+      "intermediate_parquet": tmp_parquet.as_posix(),
+    },
+  )

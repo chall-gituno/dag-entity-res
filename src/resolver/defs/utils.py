@@ -2,6 +2,20 @@ import json
 import dagster as dg
 
 
+def get_latest_meta(context, asset_key: str) -> dict:
+  asset_key = dg.AssetKey([asset_key])
+  # Get the latest materialization event
+  last_mat_event = context.instance.get_latest_materialization_event(asset_key)
+  if not last_mat_event:
+    context.log.warning("No materialization found for asset")
+    return
+
+  # Access the metadata from the materialization
+  materialization = last_mat_event.asset_materialization
+  md = materialization.metadata
+  return normalize_metadata(md)
+
+
 def normalize_metadata(meta: dict) -> dict:
   """Convert Dagster MetadataValue objects to plain Python types for use in Jinja or AI prompts."""
   flat = {}

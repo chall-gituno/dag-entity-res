@@ -209,16 +209,16 @@ CREATE OR REPLACE TEMP TABLE tmp_big3  AS SELECT * FROM (SELECT NULL::VARCHAR AS
 {% endif %}
 
 -- 4) Final outputs
-CREATE OR REPLACE TABLE {{ target_schema }}.blocks_adaptive AS
+CREATE OR REPLACE TABLE {{blocks_table}} AS
 SELECT * FROM tmp_kept1
 UNION ALL SELECT * FROM tmp_kept2
 UNION ALL SELECT * FROM tmp_kept3;
 
-CREATE OR REPLACE TABLE {{ target_schema }}.blocks_adaptive_heavy AS
+CREATE OR REPLACE TABLE {{blocks_table}}_heavy AS
 SELECT * FROM tmp_big2
 UNION ALL SELECT * FROM tmp_big3;
 
-CREATE OR REPLACE TABLE {{ target_schema }}.block_refinement_log AS
+CREATE OR REPLACE TABLE {{blocks_table}}_refinement_log AS
 SELECT 'stage1' AS stage, kind, bkey, n FROM tmp_sizes1 WHERE n > {{ max_block_size }}
 UNION ALL
 SELECT 'stage2' AS stage, kind, bkey, n FROM tmp_sizes2 WHERE n > {{ max_block_size }}

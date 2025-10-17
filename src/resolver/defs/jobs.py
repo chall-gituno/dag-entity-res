@@ -3,6 +3,12 @@ import dagster as dg
 #from resolver.defs.assets.er_blocks import er_blocks_adaptive
 
 # ---- Jobs (asset selections) ----
+ingest_data_job = dg.define_asset_job(
+  name="ingest_data_job",
+  description="Ingest and clean our foundational data",
+  selection='+key:"clean_companies"',
+  executor_def=dg.multiprocess_executor.configured({"max_concurrent": 1}),
+)
 blocking_job = dg.define_asset_job(
   name="blocking_job",
   description="Create company blocks using an adaptive strategy",
@@ -12,9 +18,21 @@ blocking_job = dg.define_asset_job(
 
 pairing_job = dg.define_asset_job(
   name="pairing_job",
-  # Run all pairing shards, then the union
-  selection='key:"er_blocking_pairs"',
-  executor_def=dg.multiprocess_executor.configured({"max_concurrent": 4}),  # tune
+  selection='key:"er_company_pairs"',
+  description="Create our pairs from our blocks",
+  executor_def=dg.multiprocess_executor.configured({"max_concurrent": 4}),
+)
+sharded_pairing_job = dg.define_asset_job(
+  name="sharded_pairing_job",
+  selection='key:"er_company_blocking_pairs"',
+  description="Create our pairs from our blocks using sharding",
+  executor_def=dg.multiprocess_executor.configured({"max_concurrent": 4}),
+)
+
+materialize_foundation = dg.define_asset_job(
+  name="materialize_foundation_job",
+  selection='+key:"er_company_blocking_pairs"',
+  executor_def=dg.multiprocess_executor.configured({"max_concurrent": 4}),
 )
 
 features_job = dg.define_asset_job(

@@ -1,0 +1,148 @@
+import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
+from dagster import asset, Output, MetadataValue
+from pathlib import Path
+from resolver.defs.resources import DuckDBResource
+from resolver.defs.settings import ERSettings
+from resolver.defs.sql_utils import connect_duckdb
+
+from resolver.defs.ai_utils import call_ai, render_prompt
+
+
+# TODO
+def name_similarity(name_a, name_b):
+  return 0.5
+
+
+@asset(name="er_pair_features", group_name="er", compute_kind="python")
+def er_pair_features(context, duckdb: DuckDBResource, settings: ERSettings):
+  """
+  Streaming generation of pair features with Parquet as the intermediate store.
+  Replaces the old sharded fan-out implementation.
+  """
+
+  pairs_table = "er.company_pairs"
+  companies_table = "silver.companies"
+  out_table = "er.company_pair_features"
+  batch_size = settings.batch_size or 5000
+  tmp_parquet = Path("/tmp/er/pair_features_stream.parquet")
+  tmp_parquet.parent.mkdir(parents=True, exist_ok=True)
+
+  # Preload company metadata once for fast lookup
+  context.log.info("Loading company metadata into memory...")
+  with duckdb.get_connection() as conn:
+    df_companies = conn.execute(
+      f"SELECT company_id, name, country FROM {companies_table}").fetch_df()
+    companies = {
+      int(row.company_id): (row.name, row.country)
+      for _, row in df_companies.iterrows()
+    }
+  context.log.info(f"Loaded {len(companies):,} companies into memory.")
+
+  # ---------------------------------------------------------------------------
+  # Prepare Parquet writer
+  # ---------------------------------------------------------------------------
+  schema = pa.schema([
+    ("company_id_a", pa.int64()),
+    ("company_id_b", pa.int64()),
+    ("name_sim", pa.float32()),
+    ("country_match", pa.bool_()),
+  ])
+  writer = pq.ParquetWriter(tmp_parquet, schema)
+
+  # ---------------------------------------------------------------------------
+  # Phase 2: Stream through pairs and compute features
+  # ---------------------------------------------------------------------------
+  query = f"SELECT company_id_a, company_id_b FROM {pairs_table}"
+  batch_size = settings.batch_size or 10_000
+
+  with duckdb.get_connection() as conn:
+    reader = conn.execute(query).fetch_record_batch(batch_size)
+
+    total = 0
+    batch_count = 0
+    row_count = 0
+
+    while True:
+      try:
+        batch = reader.read_next_batch()
+      except StopIteration:
+        break
+
+      if not batch or batch.num_rows == 0:
+        context.log.info("No more data...Done.")
+        break
+
+      batch_count += 1
+      row_count += batch.num_rows
+
+      ids_a = batch.column(0).to_pylist()
+      ids_b = batch.column(1).to_pylist()
+
+      buffer = []
+      for cid_a, cid_b in zip(ids_a, ids_b):
+        comp_a = companies.get(cid_a)
+        comp_b = companies.get(cid_b)
+        if not comp_a or not comp_b:
+          continue
+
+        name_a, country_a = comp_a
+        name_b, country_b = comp_b
+
+        name_sim = name_similarity(name_a, name_b)
+        country_match = (country_a == country_b)
+        # ai_opinion = run_ai_feature_check(name_a, name_b, country_a, country_b)
+
+        buffer.append({
+          "company_id_a": cid_a,
+          "company_id_b": cid_b,
+          "name_sim": float(name_sim),
+          "country_match": bool(country_match),
+        })
+        total += 1
+
+      # Write the current batch to Parquet
+      if buffer:
+        table = pa.Table.from_pylist(buffer, schema=schema)
+        writer.write_table(table)
+
+      if batch_count % 10 == 0:
+        context.log.info(
+          f"Processed {row_count:,} rows; computed features for {total:,} pairs so far..."
+        )
+
+  writer.close()
+  context.log.info(
+    f"Done. {row_count:,} rows processed, {total:,} feature rows written to {tmp_parquet.name}"
+  )
+
+  # ---------------------------------------------------------------------------
+  # Phase 3: Load results into DuckDB (single writer)
+  # ---------------------------------------------------------------------------
+  conn_final = duckdb.get_connection()
+  conn_final.execute("PRAGMA threads=4")
+  conn_final.execute("PRAGMA temp_directory='/tmp/duckdb-temp'")
+  conn_final.execute(f"""
+      CREATE SCHEMA IF NOT EXISTS er;
+      CREATE OR REPLACE TABLE {out_table} AS
+      SELECT * FROM read_parquet('{tmp_parquet.as_posix()}');
+  """)
+  cnt = conn_final.execute(f"SELECT COUNT(*) FROM {out_table}").fetchone()[0]
+  conn_final.close()
+
+  # ---------------------------------------------------------------------------
+  # Return Dagster output
+  # ---------------------------------------------------------------------------
+  return Output(
+    value={
+      "features_table": out_table,
+      "rows_total": cnt,
+      "intermediate_parquet": tmp_parquet.as_posix(),
+    },
+    metadata={
+      "features_table": out_table,
+      "rows_total": MetadataValue.int(cnt),
+      "intermediate_parquet": MetadataValue.path(tmp_parquet.as_posix()),
+    },
+  )

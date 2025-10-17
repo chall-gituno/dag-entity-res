@@ -17,13 +17,14 @@ def er_company_blocking(context, duckdb: DuckDBResource):
      This will create ONLY blocks using a staged/adaptive approach. The idea here is to avoid
      human trial and error to determine optimal blocking strategy.
   """
-
+  blocks_table = "er.company_blocks"
   # Most of these params are for experimenting, debugging, refining
-  # TODO: get 'em from the context
+  # TODO: get them from the runtime config
   sql = render_sql(
     "create_blocks_adaptive.sql.j2",
     source_table="silver.companies",
     target_schema="er",
+    blocks_table=blocks_table,
     id_col="company_id",
     name_col="company_name",
     domain_col="domain_name",
@@ -45,15 +46,14 @@ def er_company_blocking(context, duckdb: DuckDBResource):
     # Produce our blocking tables
     con.execute(sql)
     # Collect metrics
-    kept_cnt = con.execute("SELECT COUNT(*) FROM er.blocks_adaptive").fetchone()[0]
-    heavy_cnt = con.execute(
-      "SELECT COUNT(*) FROM er.blocks_adaptive_heavy").fetchone()[0]
+    kept_cnt = con.execute(f"SELECT COUNT(*) FROM {blocks_table}").fetchone()[0]
+    heavy_cnt = con.execute(f"SELECT COUNT(*) FROM {blocks_table}_heavy").fetchone()[0]
 
     # block size stats for kept
-    kept_stats = con.execute("""
+    kept_stats = con.execute(f"""
         WITH s AS (
           SELECT kind, bkey, COUNT(*) AS n
-          FROM er.blocks_adaptive
+          FROM {blocks_table}
           GROUP BY 1,2
         )
         SELECT
@@ -68,10 +68,10 @@ def er_company_blocking(context, duckdb: DuckDBResource):
     (blocks_total, max_kept, avg_kept, p90_kept, est_pairs_total) = kept_stats
 
     # top 10 heavy blocks (still above cap after refinement)
-    top_heavy = con.execute("""
+    top_heavy = con.execute(f"""
         WITH s AS (
           SELECT kind, bkey, COUNT(*) AS n
-          FROM er.blocks_adaptive_heavy
+          FROM {blocks_table}_heavy
           GROUP BY 1,2
         )
         SELECT kind, bkey, n
@@ -96,8 +96,29 @@ def er_company_blocking(context, duckdb: DuckDBResource):
       metadata={
         "blocks_kept_rows": kept_cnt,
         "blocks_heavy_rows": heavy_cnt,
+        "blocks_table_prefix": blocks_table,
+        "blocks_schema": "er",
       },
     )
+
+
+# Attach a check on our asset...if we really cared about
+# AI's opnion here, we could set blocking=True
+@dg.asset_check(
+  asset=er_company_blocking,
+  name="ai_block_quality_check",
+  description="Get AI's opinion on our blocking efforts",
+)
+def ai_block_quality_check(context, er_company_blocking):
+  if not os.getenv("OPENAI_API_KEY"):
+    context.log.info("AI validation will be skipped")
+    return dg.AssetCheckResult(passed=True)
+  ai_comment = get_ai_opinion(er_company_blocking)
+  context.log.info(f"\n***AI OPINION***\n{ai_comment}")
+  return dg.AssetCheckResult(
+    passed=True,
+    metadata={"ai_analysis": dg.MetadataValue.text(ai_comment)},
+  )
 
 
 def get_ai_opinion(metadata):
@@ -107,6 +128,7 @@ def get_ai_opinion(metadata):
   heavy = json.dumps(metadata.get("heavy_blocks_top10_json"), indent=2)
 
   prompt = render_prompt("blocking_check.text.j2", {
+    "type": "company",
     "stats": stats,
     "heavy_blocks": heavy,
   })
@@ -147,40 +169,22 @@ def ai_blocking_check_job():
   validate_blocking()
 
 
-# Attach a check on our asset...if we really cared about
-# AI's opnion here, we could set blocking=True
-@dg.asset_check(
-  asset=er_company_blocking,
-  name="ai_block_quality_check",
-  description="Get AI's opinion on our blocking efforts",
-)
-def ai_block_quality_check(context, er_company_blocking):
-  if not os.getenv("OPENAI_API_KEY"):
-    context.log.info("AI validation will be skipped")
-    return dg.AssetCheckResult(passed=True)
-  ai_comment = get_ai_opinion(er_company_blocking)
-  return dg.AssetCheckResult(
-    passed=True,
-    metadata={"ai_analysis": dg.MetadataValue.text(ai_comment)},
-  )
-
-
-@dg.asset(deps=["clean_companies"])
-def company_block_pair_with_stats(duckdb: DuckDBResource):
-  sql = render_sql(
-    "blocking_stats.sql.j2",
-    source_table="silver.companies",
-    target_schema="er",
-    id_col="company_id",
-    name_col="company_name",
-    domain_col="domain_name",
-    city_col="city",
-    country_col="final_country",
-    max_block_size=1000,
-    use_domain=True,
-    use_name3_country=True,
-    use_compact5_city=True,
-    # pairs_table="er.blocking_pairs",  # pass this if you already materialized pairs
-  )
-  with duckdb.get_connection() as con:
-    con.execute(sql)
+# @dg.asset(deps=["clean_companies"])
+# def company_block_pair_with_stats(duckdb: DuckDBResource):
+#   sql = render_sql(
+#     "blocking_stats.sql.j2",
+#     source_table="silver.companies",
+#     target_schema="er",
+#     id_col="company_id",
+#     name_col="company_name",
+#     domain_col="domain_name",
+#     city_col="city",
+#     country_col="final_country",
+#     max_block_size=1000,
+#     use_domain=True,
+#     use_name3_country=True,
+#     use_compact5_city=True,
+#     # pairs_table="er.blocking_pairs",  # pass this if you already materialized pairs
+#   )
+#   with duckdb.get_connection() as con:
+#     con.execute(sql)

@@ -11,9 +11,12 @@ class ERSettings(dg.ConfigurableResource):
     default_factory=lambda: os.getenv("ER_DUCKDB_TMP", "/tmp/duckdb-temp"))
 
   # Features/Modeling/Scoring
+  pairs_parquet_path: str = Field(default_factory=lambda: os.getenv(
+    "ER_PAIRING_PARQUET", "data/er/pairs/pairs.parquet"))
 
   model_path: str = Field(
     default_factory=lambda: os.getenv("ER_MODEL_PATH", "models/er_pair_clf.joblib"))
+
   score_parquet_path: str = Field(default_factory=lambda: os.getenv(
     "ER_SCORING_PARQUET", "data/er/pair_scores/score.parquet"))
   batch_size: int = Field(

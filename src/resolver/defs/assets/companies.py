@@ -6,13 +6,15 @@ import dagster as dg
 from dagster import asset, AssetExecutionContext
 from dagster_duckdb import DuckDBResource
 from resolver.defs.sql_utils import render_sql
+from resolver.defs.utils import get_latest_meta
 
 
 def get_companies() -> str:
   """
   Would usually get it from an api or whatever (this came from kaggle)
   I think it came from https://www.kaggle.com/datasets/rsaishivani/companies-database
-  but there are several others with similar name/size/fields
+  but there are several others with similar name/size/fields.  This isn't
+  about kaggle integration, so will need to manually download it.
   """
   path = os.getenv("COMPANY_FILE", "/opt/test-data/companies.zip")
   return path
@@ -79,10 +81,20 @@ def companies(context: dg.AssetExecutionContext, duckdb: DuckDBResource) -> None
 @dg.asset(deps=["companies"], group_name="silver", tags={"quality": "clean"})
 def clean_companies(context: AssetExecutionContext, duckdb: DuckDBResource) -> str:
   """Apply cleaning and normalization to our raw data.  output result to silver schema"""
+  clean_comp = "silver.companies"
+  bronze_count = get_latest_meta(context, "companies").get("rows")
+
   sql = render_sql("clean_kag_comp.sql.j2",
                    source_schema="bronze",
                    target_schema="silver")
   with duckdb.get_connection() as con:
     con.execute("create schema if not exists silver")
     con.execute(sql)
-  return "silver.companies"
+    n = con.execute(f"SELECT COUNT(*) FROM {clean_comp}").fetchone()[0]
+  context.log.info(f"{clean_comp} saved with {n} rows")
+  # should probably add asset_check for this...
+  if n != bronze_count:
+    context.log.warning("Lost some rows during cleaning!")
+  context.add_output_metadata({"rows": n})
+
+  return clean_comp

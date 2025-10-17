@@ -1,7 +1,7 @@
 [project]
 name = "resolver"
 version = "0.1.0"
-description = "Add your description here"
+description = "Orchestrated Entity Resolution"
 readme = "README.md"
 authors = [
     { name = "Colin Hall", email = "238315223+chall-gituno@users.noreply.github.com" }
