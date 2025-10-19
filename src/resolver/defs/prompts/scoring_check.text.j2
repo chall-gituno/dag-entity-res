@@ -1,0 +1,37 @@
+# scoring_quality_check.text.j2
+
+You are reviewing the output of an entity resolution model that has just finished scoring candidate company pairs.
+
+The goal is to provide a concise diagnostic summary of the model’s performance **based only on metadata statistics**, not on labeled ground truth. 
+Focus on identifying potential warning signs, patterns, or recommendations for further refinement.
+
+Below are the aggregate stats from the latest scoring run:
+
+{{ stats | tojson(indent=2) }}
+
+---
+
+Explain what these statistics suggest about the health and balance of the scoring process. 
+You can consider the following guiding questions:
+
+1. **Score Distribution**
+   - Does the number of very high / very low scores suggest overconfidence or underconfidence?
+   - Are there too many mid-range (ambiguous) scores?
+
+2. **Coverage**
+   - How many total pairs were scored?
+   - Were any null or missing scores produced (and what might that imply)?
+
+3. **Efficiency**
+   - How do the counts of `pair_features`, `pair_scores`, and `pair_features_scored` compare?
+   - Are there signs of misalignment or data loss between stages?
+
+4. **Quality Signals**
+   - Do the average, median, or quantile ranges of scores indicate a healthy model output?
+   - If entity resolution were run on this data, would you expect many large clusters or mostly small, clean ones?
+
+5. **Next Steps**
+   - Based on these signals, what should we do next? 
+     (e.g., retrain with better negatives, adjust decision threshold, review blocking strategy, etc.)
+
+Output your answer as a short narrative paragraph, followed by a concise summary block like this:

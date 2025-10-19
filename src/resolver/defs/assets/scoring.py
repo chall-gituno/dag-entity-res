@@ -8,6 +8,7 @@ import pyarrow.parquet as pq
 from resolver.defs.resources import DuckDBResource
 from resolver.defs.settings import ERSettings
 from resolver.defs.sql_utils import connect_duckdb
+from resolver.defs.ai_utils import call_ai, render_prompt
 
 
 @dg.asset(
@@ -15,17 +16,21 @@ from resolver.defs.sql_utils import connect_duckdb
   group_name="er",
   deps=[dg.AssetKey("er_pair_features")],
   compute_kind="python",
-  description=(
-    "Stream-score er.pair_features with a saved sklearn Pipeline using batches. "
-    "Writes Parquet → creates er.pair_scores, and a view er.v_pair_features_scored."),
 )
-def er_pair_scores(context, duckdb: DuckDBResource,
-                   settings: ERSettings) -> dg.MaterializeResult:
+def er_pair_scores(context, duckdb: DuckDBResource, settings: ERSettings):
+  """
+    score our features using our model. We stream our features through the 
+    model in batches to keep our system responsive while keeping processing
+    time somewhat sane.
+  """
+
   # ------- Configs (override via run config if desired) -------
-  features_table: str = "er.pair_features"
+  features_table: str = settings.features_table
   model_path: str = settings.model_path
   out_parquet: str = settings.score_parquet_path
   batch_size: int = settings.batch_size
+  scores_table: str = settings.scores_table
+  scored_feature_pairs = settings.scored_feature_pairs
   # ------------------------------------------------------------
 
   # Load model (expects a Pipeline with a ColumnTransformer named "pre")
@@ -51,7 +56,7 @@ def er_pair_scores(context, duckdb: DuckDBResource,
   raw_cols = [c for c in raw_cols if not (c in seen or seen.add(c))]
 
   # Stream rows from DuckDB
-  con_ro = connect_duckdb(os.getenv("DUCKDB_DATABASE"), read_only=True)
+  con_ro = connect_duckdb(settings.db_uri, read_only=True)
   # don't think we'd need the order by here...it will just
   # cause a delay in processing as it munges through it
   select_sql = f"""
@@ -115,28 +120,98 @@ def er_pair_scores(context, duckdb: DuckDBResource,
   with duckdb.get_connection() as con:
     context.log.info("Creating final tables/views")
     con.execute("CREATE SCHEMA IF NOT EXISTS er")
-    con.execute(
-      "CREATE OR REPLACE TABLE er.pair_scores AS "
-      "SELECT * FROM parquet_scan($p)",
-      {"p": str(out_path)},
-    )
+    con.execute(f"""
+      CREATE OR REPLACE TABLE {scores_table} AS
+      SELECT * FROM parquet_scan({out_path})
+      """)
     # Prefer a VIEW to avoid materializing 100M+ rows again
-    con.execute("""
-          CREATE OR REPLACE VIEW er.v_pair_features_scored AS
+    # this is strictly informational so if you are curious
+    # AND patient, you can have a look at how our features
+    # align with the scores.
+    con.execute(f"""
+          CREATE OR REPLACE VIEW {scored_feature_pairs} AS
           SELECT f.*, s.model_score
-          FROM er.pair_features f
-          LEFT JOIN er.pair_scores s USING (company_id_a, company_id_b)
+          FROM {features_table} f
+          LEFT JOIN {scores_table} s USING (company_id_a, company_id_b)
         """)
-    scored_rows = con.execute("SELECT COUNT(*) FROM er.pair_scores").fetchone()[0]
+    scored_rows = con.execute(f"SELECT COUNT(*) FROM {scores_table}").fetchone()[0]
   context.log.info("Done")
+  #stats = collect_scoring_stats(context, duckdb, settings)
+  result = {
+    "scores_rows": int(scored_rows),
+    "scores_table": scores_table,
+    "scored_view": scored_feature_pairs,
+    "model_path": model_path,
+  }
 
-  return dg.MaterializeResult(
-    metadata={
-      "written_parquet": dg.MetadataValue.path(str(out_path)),
-      "scores_rows": dg.MetadataValue.int(int(scored_rows)),
-      "batch_size": dg.MetadataValue.int(batch_size),
-      "features_table": dg.MetadataValue.text(features_table),
-      "model_path": dg.MetadataValue.text(model_path),
-      "scores_table": dg.MetadataValue.text("er.pair_scores"),
-      "scored_view": dg.MetadataValue.text("er.v_pair_features_scored"),
+  return dg.Output(
+    value=result,
+    metadata=result,
+  )
+
+
+@dg.op
+def validate_scoring(context, duckdb: DuckDBResource, settings: ERSettings) -> str:
+  stats = collect_scoring_stats(context, duckdb, settings)
+  context.log.info(f"Stats:\n{stats}")
+  prompt = render_prompt("scoring_check.text.j2", {
+    "stats": stats,
+  })
+  ai_comment = call_ai(prompt)
+  context.log.info(ai_comment)
+  return ai_comment
+
+
+@dg.job
+def scoring_check_job():
+  """
+  Manually run a check of our scoring.
+  """
+  validate_scoring()
+
+
+def collect_scoring_stats(context, duckdb, settings: ERSettings) -> dict:
+  stats = {}
+  with duckdb.get_connection() as con:
+    # Basic row counts
+    stats["pair_features_total"] = con.execute(
+      f"SELECT COUNT(*) FROM {settings.features_table}").fetchone()[0]
+    stats["pair_scores_total"] = con.execute(
+      f"SELECT COUNT(*) FROM {settings.scores_table}").fetchone()[0]
+    # stats["pair_features_scored_total"] = con.execute(
+    #   "SELECT COUNT(*) FROM er.pair_features_scored").fetchone()[0]
+
+    # Null or missing scores
+    stats["null_scores"] = con.execute(f"""
+      SELECT COUNT(*) FROM {settings.scores_table} WHERE model_score IS NULL
+    """).fetchone()[0]
+
+    # Score distribution
+    score_summary = con.execute(f"""
+      SELECT 
+        MIN(model_score), 
+        MAX(model_score), 
+        AVG(model_score),
+        quantile_cont(model_score, 0.5),
+        quantile_cont(model_score, 0.1),
+        quantile_cont(model_score, 0.9)
+      FROM {settings.scores_table}
+    """).fetchone()
+
+    (score_min, score_max, score_mean, score_median, score_p10,
+     score_p90) = score_summary
+
+    stats.update({
+      "score_min": float(score_min or 0),
+      "score_max": float(score_max or 0),
+      "score_mean": float(score_mean or 0),
+      "score_median": float(score_median or 0),
+      "score_p10": float(score_p10 or 0),
+      "score_p90": float(score_p90 or 0),
     })
+
+    # Simple ratios for sanity
+    stats["features_vs_scores_ratio"] = round(
+      stats["pair_scores_total"] /
+      stats["pair_features_total"], 4) if stats["pair_features_total"] else None
+  return stats

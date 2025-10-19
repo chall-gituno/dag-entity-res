@@ -1,7 +1,4 @@
 -- blocking_pairs_shard.sql.j2
-
-CREATE SCHEMA IF NOT EXISTS {{ target_schema }};
-
 -- helper expression: choose existing hash col or compute from kind|bkey
 {% if bkey_hash_col %}
   {% set HASH_EXPR = bkey_hash_col %}
@@ -9,16 +6,19 @@ CREATE SCHEMA IF NOT EXISTS {{ target_schema }};
   {% set HASH_EXPR = "hash(kind || '|' || bkey)" %}
 {% endif %}
 
--- make hash non-negative for modulo:
--- use bitmask to clear sign bit instead of ABS (avoids overflow on MIN BIGINT)
-CREATE OR REPLACE TABLE {{ target_schema }}.blocking_pairs_{{ shard_index }} AS
+
+{% if shard_table %}
+CREATE OR REPLACE TABLE {{ shard_table }} AS
+{% endif %}
 WITH shard AS (
-  SELECT *
+  SELECT DISTINCT kind, bkey, company_id
   FROM {{ blocks_table }}
   WHERE ((({{ HASH_EXPR }}) & 9223372036854775807) % {{ shard_modulus }}) = {{ shard_index }}
 ),
 pairs AS (
   SELECT
+    a.kind as kind,
+    a.bkey as bkey,
     a.company_id AS company_id_a,
     b.company_id AS company_id_b
   FROM shard a
@@ -26,21 +26,23 @@ pairs AS (
     ON a.kind = b.kind
    AND a.bkey = b.bkey
    AND b.company_id > a.company_id
-),
-dedup AS (
-  SELECT DISTINCT company_id_a, company_id_b FROM pairs
 )
-{% if cap_per_a is not none %}
+SELECT DISTINCT kind,bkey,company_id_a, company_id_b FROM pairs;
+
+{# {% if cap_per_a is not none %}
 , ranked AS (
   SELECT
     company_id_a, company_id_b,
     ROW_NUMBER() OVER (PARTITION BY company_id_a ORDER BY company_id_b) AS rn
   FROM dedup
 )
-
-SELECT company_id_a, company_id_b
+SELECT DISTINCT company_id_a, company_id_b
+FROM ranked
+WHERE rn <= {{ cap_per_a }};
+{% else %} #}
+{# SELECT company_id_a, company_id_b
 FROM ranked
 WHERE rn <= {{ cap_per_a }}
 {% else %}
 SELECT * FROM dedup
-{% endif %};
+{% endif %}; #}

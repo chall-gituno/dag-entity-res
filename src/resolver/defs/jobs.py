@@ -29,31 +29,26 @@ sharded_pairing_job = dg.define_asset_job(
   executor_def=dg.multiprocess_executor.configured({"max_concurrent": 4}),
 )
 
-materialize_foundation = dg.define_asset_job(
-  name="materialize_foundation_job",
-  selection='+key:"er_company_blocking_pairs"',
-  executor_def=dg.multiprocess_executor.configured({"max_concurrent": 4}),
-)
-
 features_job = dg.define_asset_job(
   name="features_job",
   selection='key:"er_pair_features"',
   executor_def=dg.multiprocess_executor.configured({"max_concurrent": 4}),
 )
 
-# max_concurrent of 2 takes a while but at
-# least the machine still operates
-# scoring_job_sharded = dg.define_asset_job(
-#   name="scoring_job_sharded",
-#   selection='key:"er_pair_scores_sharded"',
-#   executor_def=dg.multiprocess_executor.configured({"max_concurrent": 2}),
-# )
+materialize_foundation = dg.define_asset_job(
+  name="materialize_foundation_job",
+  selection='+key:"er_pair_features"',
+  executor_def=dg.multiprocess_executor.configured({"max_concurrent": 4}),
+)
 
+## Assumes our foundational assets are all materialized AND we
+## have built our model
 scoring_job = dg.define_asset_job(
   name="scoring_job",
   selection='key:"er_pair_scores"',
   executor_def=dg.multiprocess_executor.configured({"max_concurrent": 1}),
 )
+
 matching_selection = dg.AssetSelection.keys(
   "er_pair_matches",
   "er_pair_labels",

@@ -7,6 +7,7 @@ from dagster import asset, AssetExecutionContext
 from dagster_duckdb import DuckDBResource
 from resolver.defs.sql_utils import render_sql
 from resolver.defs.utils import get_latest_meta
+from resolver.defs.settings import ERSettings
 
 
 def get_companies() -> str:
@@ -48,9 +49,13 @@ def expand_companies(companies_raw: str) -> dict:
 
 
 @dg.asset(group_name="bronze", tags={"quality": "raw"})
-def companies(context: dg.AssetExecutionContext, duckdb: DuckDBResource) -> None:
+def companies(
+  context: dg.AssetExecutionContext,
+  duckdb: DuckDBResource,
+  settings: ERSettings,
+) -> None:
   """
-  Loads the expanded CSVs into DuckDB (bronze.companies).
+  Loads the expanded CSVs into DuckDB.
   Adjust schema/table naming as you like.
   """
   path = get_companies()
@@ -58,14 +63,14 @@ def companies(context: dg.AssetExecutionContext, duckdb: DuckDBResource) -> None
   expanded_dir = Path(companies_info["dir"])
   # Use a glob so multiple CSVs are supported
   glob_pattern = str(expanded_dir / "*.csv")
-
+  raw_comps = settings.raw_companies
   # Connect via DuckDBResource
   con = duckdb.get_connection()
   with duckdb.get_connection() as con:
     con.execute("CREATE SCHEMA IF NOT EXISTS bronze")
     # Create/replace with all CSV rows
     con.execute(f"""
-      CREATE OR REPLACE TABLE bronze.companies AS
+      CREATE OR REPLACE TABLE {raw_comps} AS
       SELECT * FROM read_csv_auto('{glob_pattern}', header=true,
         types = {{
     'year founded': 'INTEGER',
@@ -73,15 +78,19 @@ def companies(context: dg.AssetExecutionContext, duckdb: DuckDBResource) -> None
     'total employee estimate': 'INTEGER'
        }})
     """)
-    n = con.execute("SELECT COUNT(*) FROM bronze.companies").fetchone()[0]
+    n = con.execute(f"SELECT COUNT(*) FROM {raw_comps}").fetchone()[0]
     context.add_output_metadata({"rows": n, "source_glob": glob_pattern})
-    context.log.info(f"bronze.companies loaded with {n} rows from {glob_pattern}")
+    context.log.info(f"{raw_comps} loaded with {n} rows from {glob_pattern}")
 
 
 @dg.asset(deps=["companies"], group_name="silver", tags={"quality": "clean"})
-def clean_companies(context: AssetExecutionContext, duckdb: DuckDBResource) -> str:
+def clean_companies(
+  context: AssetExecutionContext,
+  duckdb: DuckDBResource,
+  settings: ERSettings,
+) -> str:
   """Apply cleaning and normalization to our raw data.  output result to silver schema"""
-  clean_comp = "silver.companies"
+  clean_comp = settings.clean_companies
   bronze_count = get_latest_meta(context, "companies").get("rows")
 
   sql = render_sql("clean_kag_comp.sql.j2",

@@ -6,23 +6,24 @@ from resolver.defs.sql_utils import render_sql
 import json
 from resolver.defs.ai_utils import call_ai, render_prompt
 from resolver.defs.utils import normalize_metadata
+from resolver.defs.settings import ERSettings
 
 stopwords_env = os.getenv("ER_STOPWORDS", "")
 stopwords_list = [w.strip() for w in stopwords_env.split(",") if w.strip()]
 
 
 @dg.asset(deps=["clean_companies"], group_name="er", tags={"quality": "working"})
-def er_company_blocking(context, duckdb: DuckDBResource):
+def er_company_blocking(context, duckdb: DuckDBResource, settings: ERSettings):
   """
      This will create ONLY blocks using a staged/adaptive approach. The idea here is to avoid
      human trial and error to determine optimal blocking strategy.
   """
-  blocks_table = "er.company_blocks"
+  blocks_table = settings.blocks_table
   # Most of these params are for experimenting, debugging, refining
   # TODO: get them from the runtime config
   sql = render_sql(
     "create_blocks_adaptive.sql.j2",
-    source_table="silver.companies",
+    source_table=settings.clean_companies,
     target_schema="er",
     blocks_table=blocks_table,
     id_col="company_id",

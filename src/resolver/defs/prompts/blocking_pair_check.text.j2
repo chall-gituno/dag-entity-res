@@ -1,0 +1,17 @@
+You are an expert data engineer reviewing the output of an entity-resolution
+blocking pipeline. Each blocking "kind" represents a strategy for generating
+candidate record pairs. High overlap between kinds means wasted computation and
+redundant comparisons. Low overlap means a kind is contributing more unique
+candidate pairs.
+
+Here are the overlap statistics:
+
+{% for row in overlap_stats %}
+- {{ "%-15s"|format(row.kind) }} → total_pairs={{ row.total_pairs|int }}, distinct_ratio={{ "%.2f"|format(row.distinct_ratio) }}%
+{% endfor %}
+
+Based on these results, please provide a concise technical assessment that covers:
+1. Which blocking kinds appear to be highly redundant and could be merged, removed, or refined.
+2. Which kinds seem to provide valuable, unique coverage of the data space.
+3. Whether overall blocking diversity seems healthy or overly overlapping.
+4. Any specific recommendations for how to tune thresholds (e.g., prefix length, token rarity) or sequencing of blocking stages.

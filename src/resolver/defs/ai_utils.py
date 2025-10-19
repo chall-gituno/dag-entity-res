@@ -20,7 +20,7 @@ def call_ai(prompt: str, model: str = "gpt-3.5-turbo") -> str:
     """
   api_key = os.environ.get("OPENAI_API_KEY")
   if not api_key:
-    return "ERROR: OPENAI_API_KEY not set"
+    return "No api key - skipping ai validation"
 
   client = OpenAI(api_key=api_key)
   try:

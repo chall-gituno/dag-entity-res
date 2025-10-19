@@ -146,14 +146,55 @@ We run our blocking using a job so we can parallelize the work...
 > Note if you want to get AI's opinion on the blocking strategy, add your `OPENAI_API_KEY` to .env
 
 ```sh
+# Create the blocks
 uv run dg launch --job blocking_job
+# Create the pairs
+uv run dg launch --job pairing_job
 ```
 
 If you have AI enabled, you'll see it suggests we do some more work on our blocking...we'll put that on the future refinements TODO and move on.
 
-### Pairing
+### Feature Engineering
 
-### Feature Extraction (SQL)
+After blocking and pairing, we have a big list of candidate record pairs — now we need to describe each pair in a way that helps the model tell if they refer to the same entity.
+That’s what feature engineering is all about.
 
-### Feature Extraction (Python)
+We build features that measure how similar two records are across key attributes (name, country, domain, employee counts, etc).
+
+Some are numerical (differences or ratios), others are categorical (exact match, prefix match, one-hot encoded country or city).
+
+We generate these features in parallel shards so that large datasets can be processed efficiently on normal hardware.
+The result is a table of pairwise feature vectors — each row describes one candidate pair.
+
+```sh
+uv run dg launch --job features_job
+```
+
+### Weakly Labeled Model Training
+
+Once we have features, we need a way to classify pairs as “match” or “non-match.”
+Ideally, we’d have a big set of human-labeled examples — but that’s rarely realistic.
+So we start with weak labeling: we generate approximate labels based on simple heuristics.
+
+For example:
+- If domain_exact == 1 or (country_exact == 1 and name_prefix6_eq == 1), call it a positive.
+- If country_exact == 0 and names differ strongly, call it a negative.
+
+These rough labels won’t be perfect, but they’re usually good enough for a model like Logistic Regression or Random Forest to learn useful boundaries.
+
+see the [notebook](exp/modelling.ipynb) for what we are doing.  we save the model so we can use it in our future processing steps.
+
+### Scoring
+
+Scoring takes the trained model and applies it to every candidate pair to estimate a match probability.
+
+Each pair gets a model_score between 0 and 1:
+- Close to 1 → likely the same entity
+- Close to 0 → probably different
+
+Because this can involve hundreds of millions of pairs, we run our scored features through the model in batches.
+
+```sh
+uv run dg launch --job scoring_job
+```
 
