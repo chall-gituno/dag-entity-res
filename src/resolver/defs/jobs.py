@@ -1,6 +1,4 @@
-#from dagster import define_asset_job, multiprocess_executor, AssetSelection
 import dagster as dg
-#from resolver.defs.assets.er_blocks import er_blocks_adaptive
 
 # ---- Jobs (asset selections) ----
 ingest_data_job = dg.define_asset_job(
@@ -24,7 +22,7 @@ pairing_job = dg.define_asset_job(
 )
 sharded_pairing_job = dg.define_asset_job(
   name="sharded_pairing_job",
-  selection='key:"er_company_blocking_pairs"',
+  selection='key:"er_sharded_blocking_pairs"',
   description="Create our pairs from our blocks using sharding",
   executor_def=dg.multiprocess_executor.configured({"max_concurrent": 4}),
 )
@@ -59,25 +57,17 @@ matching_job = dg.define_asset_job(
   name="matching_job",
   selection=matching_selection,
   executor_def=dg.multiprocess_executor.configured({"max_concurrent": 1}),
-  tags={
-    "owner": "er",
-    "layer": "matching"
-  },
-)
-# uv run dagster asset materialize -m resolver.definitions --select 'key:"sanity_*"'
-sanity_job = dg.define_asset_job(
-  name="sanity_job",
-  selection='key:"sanity_*"',
-  executor_def=dg.multiprocess_executor.configured({"max_concurrent": 2}),
 )
 
-# NOTE: the '+' here will force a rebuild of all upstream
-# dependencies regardless of whether they need them or not
-full_build = dg.define_asset_job(
-  name="full_build",
-  selection='+key:"er_entities"',
+resolve_comp_job = dg.define_asset_job(
+  name="resolve_comp_job",
+  selection='key:"er_resolve_companies"',
   executor_def=dg.multiprocess_executor.configured({"max_concurrent": 4}),
 )
-# ---- Concurrency limit (extra guardrail; optional if you use jobs) ----
-# Keeps ANY ad-hoc runs from blasting too many feature shards at once.
-#limits = [ConcurrencyLimit(key="er-pair-features", limit=2)]
+
+# NOTE: the '+' here will force a rebuild of all upstream dependencies
+er_pipeline_job = dg.define_asset_job(
+  name="er_pipeline_job",
+  selection='+key:"er_resolve_companies"',
+  executor_def=dg.multiprocess_executor.configured({"max_concurrent": 4}),
+)

@@ -1,13 +1,14 @@
 # src/resolver/defs/sql_utils.py
 from pathlib import Path
-from jinja2 import Environment, PackageLoader, select_autoescape
+from jinja2 import Environment, PackageLoader, select_autoescape, StrictUndefined
 import duckdb
 import os
 
 # Load templates from resolver.defs.sql
 sqlj2_env = Environment(
   loader=PackageLoader("resolver.defs", "sql"),
-  autoescape=select_autoescape([])  # no autoescape for .sql.j2
+  autoescape=select_autoescape([]),
+  undefined=StrictUndefined,
 )
 
 

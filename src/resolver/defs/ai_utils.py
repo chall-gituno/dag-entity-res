@@ -2,11 +2,28 @@ import os
 from openai import OpenAI
 from openai import OpenAIError
 from pathlib import Path
-from jinja2 import Environment, PackageLoader, select_autoescape
+from jinja2 import (
+  Environment,
+  PackageLoader,
+  select_autoescape,
+  StrictUndefined,
+)
+
+
+def comma(x):
+  try:
+    return f"{int(x):,}"
+  except Exception:
+    return x
+
 
 # Load templates from resolver.defs.prompts
-ai_env = Environment(loader=PackageLoader("resolver.defs", "prompts"),
-                     autoescape=select_autoescape([]))
+ai_env = Environment(
+  loader=PackageLoader("resolver.defs", "prompts"),
+  autoescape=select_autoescape([]),
+  undefined=StrictUndefined,
+)
+ai_env.filters["comma"] = comma
 
 
 def render_prompt(template_name: str, params: dict = {}) -> str:

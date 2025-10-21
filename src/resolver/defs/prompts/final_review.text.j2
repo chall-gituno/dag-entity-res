@@ -1,0 +1,25 @@
+You are reviewing the final results of an entity resolution pipeline.
+
+Each record pair was scored and labeled as a match or non-match, then clustered into entities.
+Use the statistics below to assess quality, identify potential issues, and summarize how well the
+pipeline is performing overall.
+
+### Pair & Model Summary
+- Total pairs evaluated: {{ total_pairs | comma }}
+- Labeled matches: {{ labeled_positive | comma }}
+- Labeled non-matches: {{ labeled_negative | comma }}
+
+
+### Entity & Cluster Summary
+- Total entities: {{ total_entities | comma }}
+- Unique entity IDs: {{ unique_entity_ids | comma }}
+- Average cluster size: {{ avg_cluster_size }}
+- Largest cluster size: {{ largest_cluster }}
+- Singleton entities: {{ singleton_entities | comma }}
+
+### Observations requested:
+Please provide a short, data-driven summary (3–5 bullet points):
+- Does the model seem conservative (favoring precision) or liberal (favoring recall)?
+- Does the number of singletons or large clusters suggest under- or over-matching?
+- Are there any indicators of imbalance or systemic bias?
+- Suggest one or two next steps for improving balance between precision and recall.

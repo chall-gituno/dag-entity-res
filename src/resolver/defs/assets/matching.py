@@ -5,23 +5,21 @@ from pathlib import Path
 from resolver.defs.resources import DuckDBResource
 from resolver.defs.settings import ERSettings
 from typing import Dict, List
+from collections import defaultdict
+from resolver.defs.ai_utils import call_ai, render_prompt
 
 
-@dg.asset(
-  name="er_pair_matches",
-  group_name="er",
-  deps=[dg.AssetKey("er_pair_scores")],
-  compute_kind="sql",
-)
-def er_pair_matches(context, duckdb: DuckDBResource,
-                    settings: ERSettings) -> dg.MaterializeResult:
+@dg.asset(name="er_pair_matches", group_name="er", deps=["er_pair_scores"])
+def er_pair_matches(context, duckdb: DuckDBResource, settings: ERSettings):
   """
     Determine if two entities are the same based on 
     our model.  This is all about probablity and 
     NOT absolutes!
   """
+
   hi = settings.hi
   lo = settings.lo
+  context.log.info(f"Creating matches using hi/lo {hi}/{lo}")
   with duckdb.get_connection() as con:
     con.execute(
       """
@@ -38,20 +36,13 @@ def er_pair_matches(context, duckdb: DuckDBResource,
       })
     n = con.execute("SELECT COUNT(*) FROM er.pair_matches").fetchone()[0]
 
-  return dg.MaterializeResult(metadata={
-    "rows": dg.MetadataValue.int(int(n)),
-    "hi": hi,
-    "lo": lo
-  })
+  metadata = {"rows": int(n), "match_table": "er.pair_matches", "hi": hi, "lo": lo}
+  return dg.Output(value=metadata, metadata=metadata)
 
 
-@dg.asset(
-  name="er_pair_labels",
-  group_name="er",
-  deps=[dg.AssetKey("er_pair_matches")],
-  compute_kind="sql",
-)
-def er_pair_labels(context, duckdb: DuckDBResource) -> dg.MaterializeResult:
+@dg.asset(name="er_pair_labels", group_name="er", deps=["er_pair_matches"])
+def er_pair_labels(context, duckdb: DuckDBResource):
+  """Create labeled pairs"""
   with duckdb.get_connection() as con:
     con.execute("""
         CREATE OR REPLACE TABLE er.pair_labels AS
@@ -70,7 +61,13 @@ def er_pair_labels(context, duckdb: DuckDBResource) -> dg.MaterializeResult:
       """).fetchone()
 
   pos, neg, unl = (int(counts[0] or 0), int(counts[1] or 0), int(counts[2] or 0))
-  return dg.MaterializeResult(metadata={"pos": pos, "neg": neg, "unlabeled": unl})
+  metadata = {
+    "pos": pos,
+    "neg": neg,
+    "unlabeled": unl,
+    "labels_table": "er.pair_labels",
+  }
+  return dg.Output(value=metadata, metadata=metadata)
 
 
 # Disjoint Set Union (DSU) data structure, also known as a Union-Find data structure.
@@ -118,15 +115,9 @@ def _conn(uri, mem, tmp, ro=True):
   return con
 
 
-@dg.asset(
-  name="er_entities",
-  group_name="er",
-  deps=[dg.AssetKey("er_pair_matches")],  # only depends on match decisions
-  compute_kind="python",
-  description=
-  "Compute connected components (entity ids) from 'match' pairs via streaming union-find."
-)
-def er_entities(context, settings: ERSettings) -> dg.MaterializeResult:
+@dg.asset(name="er_entities", group_name="er", deps=["er_pair_matches"])
+def er_entities(context, settings: ERSettings):
+  """Compute connected components (entity ids) from 'match' pairs via streaming union-find."""
   con = _conn(settings.db_uri, settings.duckdb_mem, settings.duckdb_tmp, ro=True)
   # stream ONLY 'match' edges (this is the whole graph to cluster)
   con.execute("""
@@ -171,7 +162,7 @@ def er_entities(context, settings: ERSettings) -> dg.MaterializeResult:
   # Emit mapping (company_id -> representative). Use smallest original id per set if you prefer.
   # Here: rep = DSU root index; we then choose canonical entity_id as the MIN company_id in that set.
   # First collect members per root:
-  from collections import defaultdict
+
   members: Dict[int, List[int]] = defaultdict(list)
   for cid, i in to_idx.items():
     r = dsu.find(i)
@@ -181,7 +172,7 @@ def er_entities(context, settings: ERSettings) -> dg.MaterializeResult:
   rows_company: List[int] = []
   rows_entity: List[int] = []
   for r, ids in members.items():
-    ent = min(ids)  # canonical choice: smallest company_id in the component
+    ent = min(ids)
     rows_company.extend(ids)
     rows_entity.extend([ent] * len(ids))
   out_parquet = settings.match_parquet_path
@@ -213,64 +204,73 @@ def er_entities(context, settings: ERSettings) -> dg.MaterializeResult:
   n = conw.execute("SELECT COUNT(*) FROM er.entities").fetchone()[0]
   conw.close()
 
-  return dg.MaterializeResult(
-    metadata={
-      "edges":
-      dg.MetadataValue.int(int(total_edges)),
-      "nodes":
-      dg.MetadataValue.int(len(to_idx)),
-      "entities_rows":
-      dg.MetadataValue.int(int(n)),
-      "parquet":
-      dg.MetadataValue.path(out_parquet),
-      "note":
-      dg.MetadataValue.text("entity_id = min(company_id) per connected component"),
-    })
+  result = {
+    "edges": int(total_edges),
+    "nodes": len(to_idx),
+    "entities_rows": int(int(n)),
+    "note": "entity_id = min(company_id) per connected component",
+  }
+  return dg.Output(value=result, metadata=result)
 
 
-# Brutally slow
-@dg.asset(name="er_entities_sql",
-          group_name="er",
-          deps=[dg.AssetKey("er_pair_matches")],
-          compute_kind="sql",
-          description="Clusters companies by transitive closure over match edges.")
-def er_entities_sql(context, duckdb: DuckDBResource) -> dg.MaterializeResult:
+def get_matching_stats(duckdb: DuckDBResource, settings: ERSettings) -> dict:
+  """Compute high-level metrics after entity resolution."""
+  stats = {}
   with duckdb.get_connection() as con:
-    con.execute("""
-        -- build labels via simple propagation (can replace with Python union-find)
-CREATE OR REPLACE TABLE er.entities AS
-WITH RECURSIVE
-edges AS (
-  SELECT company_id_a AS a, company_id_b AS b
-  FROM er.pair_matches
-  WHERE decision = 'match'
-),
--- make edges undirected
-ud AS (
-  SELECT a, b FROM edges
-  UNION ALL
-  SELECT b, a FROM edges
-),
--- one seed row per node
-seed AS (
-  SELECT DISTINCT a AS id FROM ud
-),
--- propagate reachability; UNION = DISTINCT to avoid infinite loops
-reach(id, root) AS (
-  SELECT id, id FROM seed
-  UNION
-  SELECT ud.b AS id, reach.root
-  FROM ud
-  JOIN reach ON ud.a = reach.id
-),
-labels AS (
-  SELECT id, MIN(root) AS entity_id
-  FROM reach
-  GROUP BY 1
-)
-SELECT id AS company_id, entity_id
-FROM labels;
-      """)
-    cnt = con.execute("SELECT COUNT(*) FROM er.entities").fetchone()[0]
+    # --- Pair-level counts ---
+    stats["total_pairs"] = con.execute(
+      "SELECT COUNT(*) FROM er.pair_labels").fetchone()[0]
+    stats["labeled_positive"] = con.execute(
+      "SELECT COUNT(*) FROM er.pair_labels WHERE label_weak = 1").fetchone()[0]
+    stats["labeled_negative"] = con.execute(
+      "SELECT COUNT(*) FROM er.pair_labels WHERE label_weak = 0").fetchone()[0]
 
-  return dg.MaterializeResult(metadata={"entities": dg.MetadataValue.int(int(cnt))})
+    # --- Entity-level counts ---
+    stats["total_entities"] = con.execute(
+      "SELECT COUNT(*) FROM er.entities").fetchone()[0]
+    stats["unique_entity_ids"] = con.execute(
+      "SELECT COUNT(DISTINCT entity_id) FROM er.entities").fetchone()[0]
+
+    # --- Cluster distribution ---
+    row = con.execute("""
+      SELECT
+        AVG(cluster_size) AS avg_cluster_size,
+        MAX(cluster_size) AS largest_cluster,
+        SUM(CASE WHEN cluster_size = 1 THEN 1 ELSE 0 END) AS singleton_entities
+      FROM (
+        SELECT entity_id, COUNT(*) AS cluster_size
+        FROM er.entities
+        GROUP BY entity_id
+      )
+    """).fetchone()
+    stats["avg_cluster_size"], stats["largest_cluster"], stats[
+      "singleton_entities"] = row
+
+    # fill Nones with safe defaults for the template
+    for k, v in stats.items():
+      if v is None:
+        stats[k] = 0
+
+  return stats
+
+
+def validate_matches(context, duckdb: DuckDBResource, settings: ERSettings) -> str:
+  stats = get_matching_stats(duckdb, settings)
+  prompt = render_prompt("final_review.text.j2", stats)
+  context.log.info(f"Prompt:\n{prompt}")
+  ai_comment = call_ai(prompt)
+  context.log.info(f"\n{ai_comment}")
+  return ai_comment
+
+
+@dg.op
+def validate_matches_op(context, duckdb: DuckDBResource, settings: ERSettings) -> str:
+  return validate_matches(context, duckdb, settings)
+
+
+@dg.job
+def validate_matches_job():
+  """
+  Manually run a check of our pairing.
+  """
+  validate_matches_op()

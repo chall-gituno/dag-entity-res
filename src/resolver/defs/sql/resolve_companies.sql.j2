@@ -1,0 +1,29 @@
+--TODO: use settings vars
+CREATE OR REPLACE TABLE gold.resolved_companies AS
+WITH joined AS (
+  SELECT
+    e.entity_id,
+    c.company_id,
+    c.company_name as name,
+    c.domain_name as domain,
+    c.final_country as country,
+    c.city,
+    c.total_employee_estimate as employees
+  FROM er.entities e
+  JOIN silver.companies c USING (company_id)
+),
+aggregated AS (
+  SELECT
+    entity_id,
+    COUNT(*) AS sources_count,
+    -- choose canonical fields using heuristics:
+    ANY_VALUE(domain) AS domain,
+    MODE() WITHIN GROUP (ORDER BY country) AS country,
+    MODE() WITHIN GROUP (ORDER BY city) AS city,
+    MODE() WITHIN GROUP (ORDER BY LOWER(name)) AS name,
+    ROUND(AVG(employees), 1) AS employees_avg
+  FROM joined
+  GROUP BY 1
+)
+SELECT *
+FROM aggregated;

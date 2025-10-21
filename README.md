@@ -16,7 +16,6 @@ The focus is on methodology and reasoning, not on producing a single, authoritat
 You can think of it as a concrete expression of a mental model: how to frame, test, and reason about similarity and matching across datasets.
 
 
-
 ## Setup
 
 ### The Data
@@ -66,13 +65,13 @@ uv run dg dev
 
 The broad strokes...
 
-1. Ingest & Clean (bronze → silver)
+1. Ingest & Clean (bronze -> silver)
 2. Blocking & Pairing (multi-strategy block generation, adaptive block capping)
 3. Feature Engineering (numerical + categorical similarity metrics)
 4. Weakly Labeled Model Training (scikit-learn pipeline, persisted with joblib)
-5. Scoring (parallel or streaming inference → pair_scores)
+5. Scoring (streaming inference → pair_scores)
 6. Entity Resolution / Clustering (union-find → er.entities)
-7. Sanity Checks + Canonicalization (detect mega-clusters, derive gold record views)
+7. Resolved Canonical Companies
 
 ## Processing
 
@@ -154,6 +153,11 @@ uv run dg launch --job pairing_job
 
 If you have AI enabled, you'll see it suggests we do some more work on our blocking...we'll put that on the future refinements TODO and move on.
 
+You can do a quick sanity check if you like...
+```sh
+duckdb /path/to/db.duckdb -f artifacts/block_pair_sanity.sql
+```
+
 ### Feature Engineering
 
 After blocking and pairing, we have a big list of candidate record pairs — now we need to describe each pair in a way that helps the model tell if they refer to the same entity.
@@ -196,5 +200,50 @@ Because this can involve hundreds of millions of pairs, we run our scored featur
 
 ```sh
 uv run dg launch --job scoring_job
+
 ```
+
+### Entity Resolution / Clustering
+
+Now comes the actual resolution step — turning all those scored pairs into clusters of entities.
+
+We treat each “match” as a connection between two nodes in a graph:
+- Each company_id is a node.
+- Each match edge links two companies that the model believes are the same entity.
+
+We then use a Union-Find (Disjoint Set) algorithm to find connected components — every connected subgraph becomes one resolved entity.
+
+```sh
+ uv run dg launch --job matching_job
+```
+
+>__er.entities__
+
+| company_id | entity_id |
+|-----------:|----------:|
+| 1178881    | 7         |
+| 6823024    | 7         |
+| 1567113    | 38180     |
+| 1559241    | 16567     |
+| 3567617    | 36201     |
+
+
+### Resolved Canonical Companies
+
+After entity resolution has done its job — figuring out which company records represent the same real-world organization — we still need to decide what the final version of each company actually looks like.
+
+At this stage, each entity_id in er.entities represents a cluster of records that have been matched together.
+
+For example, three records that all point to the same entity might look like this:
+
+| company_id  | name                        | domain        | city        | country |
+|-------------|-----------------------------|---------------|-------------|----------|
+| 1178881     | IBM                         | ibm.com       | New York    | USA      |
+| 6823024     | International Business Mach | ibm.co.uk     | London      | UK       |
+| 1567113     | IBM Corp.                   | ibm.com       | Armonk      | USA      |
+
+Entity resolution tells us these (likely) belong together — but it doesn’t decide which name, domain, or location is the "truth".
+
+Canonicalization takes all the clustered duplicates and produces one clean, standardized “gold record” for each entity.
+That record becomes the official version you’ll use downstream for analytics, deduped exports, or CRM enrichment.  The goal is to strike a balance between precision and completeness — each canonical record should be representative of its underlying group, not just the first one that happened to match.
 

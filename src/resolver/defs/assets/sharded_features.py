@@ -1,25 +1,23 @@
 import os
 from pathlib import Path
-from dagster import asset, AssetExecutionContext, MaterializeResult, MetadataValue
+import dagster as dg
 from typing import List
 from resolver.defs.resources import DuckDBResource
 from resolver.defs.sql_utils import render_sql
 from resolver.defs.settings import ERSettings
 
-SHARD_MODULUS = int(os.getenv("SHARD_MODULUS", "64"))
-OUT_DIR = Path("/tmp/data/er/pair_features_shards")
-
 
 def make_feature_shard(i: int, duckdb, settings: ERSettings):
-  OUT_DIR.mkdir(parents=True, exist_ok=True)
-  out_path = OUT_DIR / f"shard={i}.parquet"
+  out_dir = Path(settings.features_parquet_out)
+  out_dir.mkdir(parents=True, exist_ok=True)
+  out_path = out_dir / f"shard={i}.parquet"
   pairs_table = settings.pairs_table
   comp_table = settings.clean_companies
 
   sql = render_sql(
     "pair_features_shard.sql.j2",
     shard_index=i,
-    shard_modulus=SHARD_MODULUS,
+    shard_modulus=settings.shard_modulus,
     pairs_table=pairs_table,
     companies_table=comp_table,
   )
@@ -45,18 +43,19 @@ def make_feature_shard(i: int, duckdb, settings: ERSettings):
   return out_path
 
 
-@asset(deps=["er_company_blocking_pairs"], name="er_pair_features")
+@dg.asset(deps=["er_company_pairs"], name="er_pair_features")
 def er_pair_features_union(
-  context: AssetExecutionContext,
+  context: dg.AssetExecutionContext,
   duckdb: DuckDBResource,
   settings: ERSettings,
 ):
   """
-  Create our features table from our pairs. This is where we take a pause and work on our model.
+  Create our features table from our pairs. Once this is materialized, we take a pause and work on our model.
   This is a fairly demanding process so we do it in shards to keep our system from getting hammered.
   """
+  context.log.info("Creating feature shards...this may take a while")
   feature_shard_assets: List = [
-    make_feature_shard(i, duckdb, settings) for i in range(SHARD_MODULUS)
+    make_feature_shard(i, duckdb, settings) for i in range(settings.shard_modulus)
   ]
   features_table = settings.features_table
   with duckdb.get_connection() as con:
@@ -65,7 +64,7 @@ def er_pair_features_union(
     con.execute(f"""
             CREATE OR REPLACE TABLE {features_table} AS
             SELECT *
-            FROM read_parquet('{OUT_DIR}/shard=*.parquet');
+            FROM read_parquet('{settings.features_parquet_out}/shard=*.parquet');
         """)
     total = con.execute(f"SELECT COUNT(*) FROM {features_table}").fetchone()[0]
 
@@ -74,8 +73,10 @@ def er_pair_features_union(
             SELECT SUM(domain_exact) AS domain_exact_matches
             FROM {features_table}
         """).fetchone()[0]
+
   result = {
     "total_rows": int(total),
     "domain_exact_matches": int(int(dom or 0)),
+    "ouput_table": features_table,
   }
-  context.add_output_metadata(result)
+  return dg.Output(value=result, metadata=result)

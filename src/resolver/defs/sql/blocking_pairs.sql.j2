@@ -4,9 +4,10 @@
 --   blocks_table   : table containing (kind, bkey, company_id)
 --   pairs_table    : target table name for output
 
-CREATE OR REPLACE TABLE {{ pairs_table }} AS
+-- build intermediate pair table that preserves blocking kind and bkey
+
+CREATE OR REPLACE TABLE {{ pairs_with_kind }} AS
 WITH base AS (
-  -- De-dup within each (kind, bkey) to keep only unique company_ids
   SELECT DISTINCT kind, bkey, company_id
   FROM {{ blocks_table }}
 ),
@@ -21,9 +22,26 @@ pairs AS (
     ON a.kind = b.kind
    AND a.bkey = b.bkey
    AND b.company_id > a.company_id
-),
-dedup AS (
-  SELECT DISTINCT kind, bkey, company_id_a, company_id_b
-  FROM pairs
 )
-SELECT * FROM dedup;
+SELECT DISTINCT kind, bkey, company_id_a, company_id_b
+FROM pairs
+;
+
+-- now derive the deduplicated + capped version for modeling
+CREATE OR REPLACE TABLE {{ pairs_table }} AS
+WITH dis_pairs AS (
+  SELECT DISTINCT company_id_a, company_id_b
+  FROM {{ pairs_with_kind }}
+),
+ranked AS (
+  SELECT
+    company_id_a,
+    company_id_b,
+    ROW_NUMBER() OVER (PARTITION BY company_id_a ORDER BY company_id_b) AS rn
+  FROM dis_pairs
+)
+-- cap the number of candidate pairs per A
+SELECT DISTINCT company_id_a, company_id_b
+FROM ranked
+WHERE rn <= {{ cap_per_a }}
+;

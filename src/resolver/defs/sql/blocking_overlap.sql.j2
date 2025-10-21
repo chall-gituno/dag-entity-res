@@ -1,0 +1,47 @@
+-- 1) Summary: how many companies are touched by multiple blocking kinds
+CREATE OR REPLACE TEMP TABLE tmp_company_overlap_summary AS
+WITH company_kinds AS (
+  SELECT company_id, COUNT(DISTINCT kind) AS kind_count
+  FROM {{ blocks_table }}
+  GROUP BY 1
+),
+summary AS (
+  SELECT
+    COUNT(*) AS total_companies,
+    SUM(CASE WHEN kind_count = 1 THEN 1 ELSE 0 END) AS single_kind_companies,
+    SUM(CASE WHEN kind_count > 1 THEN 1 ELSE 0 END) AS multi_kind_companies
+  FROM company_kinds
+)
+SELECT
+  total_companies,
+  single_kind_companies,
+  multi_kind_companies,
+  ROUND(100.0 * multi_kind_companies / total_companies, 2) AS pct_multi_kind
+FROM summary;
+
+-- 2) Pairwise kind overlap (based on shared companies)
+CREATE OR REPLACE TEMP TABLE tmp_pairwise_overlap AS
+WITH kind_companies AS (
+  SELECT DISTINCT kind, company_id
+  FROM {{ blocks_table }}
+),
+pairwise_overlap AS (
+  SELECT
+    a.kind AS kind_a,
+    b.kind AS kind_b,
+    COUNT(DISTINCT a.company_id) AS shared_companies
+  FROM kind_companies a
+  JOIN kind_companies b USING (company_id)
+  WHERE a.kind < b.kind
+  GROUP BY 1,2
+)
+SELECT
+  kind_a,
+  kind_b,
+  shared_companies
+FROM pairwise_overlap
+ORDER BY shared_companies DESC
+LIMIT 20;
+
+-- Return summary as main query result
+SELECT * FROM tmp_company_overlap_summary;

@@ -21,16 +21,11 @@ def _digest_paths(paths: list[str]) -> str:
 
 @sensor(
   name="source_companies_changed",
-  minimum_interval_seconds=30,  # debounce
-  default_status=DefaultSensorStatus.STOPPED,  # start enabled
-  job_name="full_build",  # which job to launch
+  minimum_interval_seconds=30,
+  default_status=DefaultSensorStatus.STOPPED,
+  job_name="er_pipeline_job",
 )
 def source_companies_changed_sensor(context):
-  # Point this at your real raw source(s)
-  # Example: single file
-  # paths = ["data/raw/companies.csv"]
-  # Example: folder of CSVs (use a glob)
-  #paths = glob.glob("data/raw/companies/*.csv")
   paths = [os.getenv("COMPANY_FILE")]
   print(f"Context is {type(context)}")
 

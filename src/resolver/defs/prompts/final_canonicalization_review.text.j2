@@ -1,0 +1,20 @@
+You are reviewing the final canonicalization step in an entity resolution pipeline.
+
+Each entity_id represents a cluster of company records that were determined to be the same real-world organization.
+
+Statistics:
+- Total records linked: {{ total_records | comma }}
+- Total entities (clusters): {{ total_entities | comma }}
+- Singleton entities (only one record): {{ singletons | comma }} ({{ pct_singletons }}%)
+- Multi-member entities: {{ multi_member_entities | comma }}
+- Average cluster size: {{ avg_cluster_size }}
+- Largest cluster: {{ max_cluster_size }}
+{% if resolved_rows %}
+- Canonical company rows in final view: {{ resolved_rows | comma }}
+{% endif %}
+
+Provide a short assessment (3–5 bulletpoints):
+- Does the ratio of singletons to multi-member clusters seem reasonable?
+- Are there signs of over-merging (very large clusters) or under-merging (too many singletons)?
+- Does the overall entity-to-record ratio suggest good precision/recall balance?
+Be concise, factual, and data-driven.

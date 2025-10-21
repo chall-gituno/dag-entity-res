@@ -5,18 +5,14 @@ import dagster as dg
 import joblib
 import pyarrow as pa
 import pyarrow.parquet as pq
+from sklearn.metrics import precision_score, recall_score, f1_score
 from resolver.defs.resources import DuckDBResource
 from resolver.defs.settings import ERSettings
 from resolver.defs.sql_utils import connect_duckdb
 from resolver.defs.ai_utils import call_ai, render_prompt
 
 
-@dg.asset(
-  name="er_pair_scores",
-  group_name="er",
-  deps=[dg.AssetKey("er_pair_features")],
-  compute_kind="python",
-)
+@dg.asset(name="er_pair_scores", group_name="er", deps=["er_pair_features"])
 def er_pair_scores(context, duckdb: DuckDBResource, settings: ERSettings):
   """
     score our features using our model. We stream our features through the 
@@ -59,11 +55,13 @@ def er_pair_scores(context, duckdb: DuckDBResource, settings: ERSettings):
   con_ro = connect_duckdb(settings.db_uri, read_only=True)
   # don't think we'd need the order by here...it will just
   # cause a delay in processing as it munges through it
+
   select_sql = f"""
       SELECT company_id_a, company_id_b, {", ".join(raw_cols)}
       FROM {features_table}
       -- ORDER BY company_id_a, company_id_b
     """
+  #print(f"Batch Select:\n{select_sql}")
   context.log.info(
     f"Streaming select from {features_table} with batch_size={batch_size}; "
     f"{len(raw_cols)} raw columns for preprocessor.")
@@ -72,11 +70,13 @@ def er_pair_scores(context, duckdb: DuckDBResource, settings: ERSettings):
   # Prepare Parquet writer
   out_path = Path(out_parquet)
   out_path.parent.mkdir(parents=True, exist_ok=True)
+
   writer: pq.ParquetWriter | None = None
   total_rows = 0
   batch_count = 0
   row_count = 0
   heartbeat_every = 10_000_000  # log once every 10M rows
+
   try:
     while True:
       try:
@@ -119,11 +119,12 @@ def er_pair_scores(context, duckdb: DuckDBResource, settings: ERSettings):
 
   with duckdb.get_connection() as con:
     context.log.info("Creating final tables/views")
-    con.execute("CREATE SCHEMA IF NOT EXISTS er")
-    con.execute(f"""
+    fin_tab = f"""
       CREATE OR REPLACE TABLE {scores_table} AS
-      SELECT * FROM parquet_scan({out_path})
-      """)
+      SELECT * FROM parquet_scan('{out_path}')
+      """
+    #print(fin_tab)
+    con.execute(fin_tab)
     # Prefer a VIEW to avoid materializing 100M+ rows again
     # this is strictly informational so if you are curious
     # AND patient, you can have a look at how our features
@@ -151,6 +152,10 @@ def er_pair_scores(context, duckdb: DuckDBResource, settings: ERSettings):
 
 
 @dg.op
+def validate_scoring_op(context, duckdb: DuckDBResource, settings: ERSettings) -> str:
+  return validate_scoring(context, duckdb, settings)
+
+
 def validate_scoring(context, duckdb: DuckDBResource, settings: ERSettings) -> str:
   stats = collect_scoring_stats(context, duckdb, settings)
   context.log.info(f"Stats:\n{stats}")
@@ -167,7 +172,7 @@ def scoring_check_job():
   """
   Manually run a check of our scoring.
   """
-  validate_scoring()
+  validate_scoring_op()
 
 
 def collect_scoring_stats(context, duckdb, settings: ERSettings) -> dict:
