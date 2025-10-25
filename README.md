@@ -15,6 +15,7 @@ The focus is on methodology and reasoning, not on producing a single, authoritat
 
 You can think of it as a concrete expression of a mental model: how to frame, test, and reason about similarity and matching across datasets.
 
+> This is actually just a pipeline i setup as part of testing integration for the [Leifer Project](https://github.com/leifer-labs/leifer)
 
 ## Setup
 
